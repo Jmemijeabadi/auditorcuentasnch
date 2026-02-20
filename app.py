@@ -35,9 +35,15 @@ def analizar_conceptos(texto):
     return resultados
 
 def extraer_datos_paciente(texto):
-    # Extraer Nombre del Paciente
-    match_nombre = re.search(r"Nombre Paciente\s*\n*([A-ZÑ\s]{10,})", texto)
-    paciente = match_nombre.group(1).replace("Medico", "").strip() if match_nombre else "No identificado"
+    # Buscamos TODO lo que esté entre "Nombre Paciente" y "Medico"
+    # [\s\S]*? significa "cualquier carácter, incluyendo saltos de línea, hasta encontrar la palabra Medico"
+    match_nombre = re.search(r"Nombre Paciente\s+([\s\S]*?)M[eé]dico", texto, re.IGNORECASE)
+    
+    if match_nombre:
+        # Extraemos el texto, cambiamos los saltos de línea por espacios y limpiamos los bordes
+        paciente = match_nombre.group(1).replace('\n', ' ').strip()
+    else:
+        paciente = "No identificado"
         
     # Extraer Total de la Cuenta (Cargos)
     matches_cargos = re.findall(r"CARGOS:\s*([\d,]+\.\d{2})", texto)
