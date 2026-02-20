@@ -3,17 +3,17 @@ import pdfplumber
 import pandas as pd
 import re
 
-# Configuración de la página
-st.set_page_config(page_title="Auditor de Cuentas Hospitalarias", layout="wide")
+# Configuración de la página (más ancha para mejor visualización)
+st.set_page_config(page_title="Auditor de Cuentas Hospitalarias", layout="wide", page_icon="🏥")
 
 st.title("🏥 Auditor Masivo de Estados de Cuenta")
-st.markdown("Sube **varios** estados de cuenta en PDF para identificar pacientes, totales y conceptos faltantes.")
+st.markdown("Sube **varios** estados de cuenta en PDF. El sistema extraerá los datos y resaltará visualmente las posibles fugas de ingresos.")
 
 # Diccionario de conceptos clave a buscar
 CONCEPTOS_CLAVE = {
     "quirofano": ["quirofano", "sala de cirugia", "cirugía"],
     "oxigeno": ["oxigeno", "oxigeno por hora"],
-    "recuperacion": ["recuperacion", "sala de recuperacion"],
+    "recuperacion": ["recuperacion", "sala de recuperacion", "post operatorio"],
     "habitacion": ["habitacion", "habitacion ambulatoria"]
 }
 
@@ -27,7 +27,6 @@ def extraer_texto_pdf(archivo_pdf):
     return texto_completo
 
 def analizar_conceptos(texto):
-    # Convertimos a minúsculas solo para buscar los conceptos más fácilmente
     texto_min = texto.lower()
     resultados = {}
     for concepto, palabras_clave in CONCEPTOS_CLAVE.items():
@@ -36,78 +35,99 @@ def analizar_conceptos(texto):
     return resultados
 
 def extraer_datos_paciente(texto):
-    """
-    Usa Expresiones Regulares (Regex) para encontrar el nombre y el total de cargos.
-    """
-    # 1. Extraer Nombre del Paciente
-    # Busca "Nombre Paciente", posibles espacios/saltos de línea, y captura todo lo que sea letras mayúsculas
+    # Extraer Nombre del Paciente
     match_nombre = re.search(r"Nombre Paciente\s*\n*([A-ZÑ\s]{10,})", texto)
-    
-    if match_nombre:
-        # Limpiamos espacios extra y quitamos palabras como "Medico" si se colaron
-        paciente = match_nombre.group(1).replace("Medico", "").strip()
-    else:
-        paciente = "No identificado"
+    paciente = match_nombre.group(1).replace("Medico", "").strip() if match_nombre else "No identificado"
         
-    # 2. Extraer Total de la Cuenta (Cargos)
-    # Busca la palabra "CARGOS:" seguida de números, comas y dos decimales
+    # Extraer Total de la Cuenta (Cargos)
     matches_cargos = re.findall(r"CARGOS:\s*([\d,]+\.\d{2})", texto)
-    
-    if matches_cargos:
-        # Tomamos el último que aparezca en el documento, ya que suele ser el Gran Total
-        total_cargos = f"${matches_cargos[-1]}"
-    else:
-        total_cargos = "No encontrado"
+    total_cargos = f"${matches_cargos[-1]}" if matches_cargos else "No encontrado"
         
     return paciente, total_cargos
 
+# Función para colorear las celdas de alerta en la tabla
+def colorear_alertas(valor):
+    if valor == "🚨 ALERTA":
+        return 'background-color: #ffcccc; color: #990000; font-weight: bold;'
+    elif valor == "Ok":
+        return 'color: #006600;'
+    return ''
+
 # Interfaz de carga de archivos
 archivos_subidos = st.file_uploader(
-    "Selecciona uno o más estados de cuenta (PDF)", 
+    "Selecciona los estados de cuenta (PDF)", 
     type=["pdf"], 
     accept_multiple_files=True
 )
 
+st.divider()
+
 if archivos_subidos:
-    st.info(f"Analizando {len(archivos_subidos)} archivo(s)...")
-    
-    datos_reporte = []
-    
-    for archivo in archivos_subidos:
-        # 1. Extraer todo el texto
-        texto_pdf = extraer_texto_pdf(archivo)
+    # Mostramos un mensaje de carga
+    with st.spinner(f'Analizando {len(archivos_subidos)} archivo(s)...'):
+        datos_reporte = []
         
-        # 2. Extraer Paciente y Total
-        paciente, total = extraer_datos_paciente(texto_pdf)
+        for archivo in archivos_subidos:
+            texto_pdf = extraer_texto_pdf(archivo)
+            paciente, total = extraer_datos_paciente(texto_pdf)
+            conceptos = analizar_conceptos(texto_pdf)
+            
+            # Reglas de negocio
+            falta_oxigeno = conceptos["quirofano"] and not conceptos["oxigeno"]
+            falta_recuperacion = conceptos["quirofano"] and not conceptos["recuperacion"]
+            
+            datos_reporte.append({
+                "Archivo": archivo.name,
+                "Paciente": paciente,
+                "Total Cargos": total,
+                "Tuvo Quirófano": "✅ Sí" if conceptos["quirofano"] else "❌ No",
+                "Falta Cobrar Oxígeno": "🚨 ALERTA" if falta_oxigeno else "Ok",
+                "Falta Cobrar Recuperación": "🚨 ALERTA" if falta_recuperacion else "Ok"
+            })
         
-        # 3. Analizar conceptos médicos
-        conceptos = analizar_conceptos(texto_pdf)
+        df_resultados = pd.DataFrame(datos_reporte)
         
-        # 4. Lógica de reglas de negocio
-        falta_oxigeno = conceptos["quirofano"] and not conceptos["oxigeno"]
-        falta_recuperacion = conceptos["quirofano"] and not conceptos["recuperacion"]
+        # --- SECCIÓN VISUAL (MÉTRICAS) ---
+        st.subheader("📊 Panel de Control de Auditoría")
         
-        # 5. Agregar fila al reporte
-        datos_reporte.append({
-            "Archivo": archivo.name,
-            "Paciente": paciente,
-            "Total Cargos": total,
-            "Tuvo Quirófano": "✅ Sí" if conceptos["quirofano"] else "❌ No",
-            "Falta Cobrar Oxígeno": "🚨 ALERTA" if falta_oxigeno else "Ok",
-            "Falta Cobrar Recuperación": "🚨 ALERTA" if falta_recuperacion else "Ok"
-        })
-    
-    # Mostrar tabla
-    df_resultados = pd.DataFrame(datos_reporte)
-    
-    st.subheader("📊 Resumen de Auditoría")
-    st.dataframe(df_resultados, use_container_width=True)
-    
-    # Botón de descarga
-    csv = df_resultados.to_csv(index=False).encode('utf-8')
-    st.download_button(
-        label="📥 Descargar Reporte en Excel (CSV)",
-        data=csv,
-        file_name='reporte_auditoria_hospital.csv',
-        mime='text/csv',
-    )
+        # Calculamos los totales para los KPIs
+        total_cuentas = len(df_resultados)
+        alertas_oxi = sum(df_resultados["Falta Cobrar Oxígeno"] == "🚨 ALERTA")
+        alertas_rec = sum(df_resultados["Falta Cobrar Recuperación"] == "🚨 ALERTA")
+        
+        col1, col2, col3 = st.columns(3)
+        col1.metric("📄 Cuentas Analizadas", total_cuentas)
+        col2.metric("⚠️ Alertas por Oxígeno Faltante", alertas_oxi)
+        col3.metric("⚠️ Alertas por Recuperación Faltante", alertas_rec)
+        
+        st.divider()
+        
+        # --- SECCIÓN VISUAL (GRÁFICOS Y TABLA) ---
+        col_tabla, col_grafico = st.columns([2, 1]) # La tabla ocupará más espacio que el gráfico
+        
+        with col_tabla:
+            st.markdown("**Detalle por Paciente**")
+            # Aplicamos el estilo de colores a la tabla
+            df_estilizado = df_resultados.style.map(colorear_alertas, subset=["Falta Cobrar Oxígeno", "Falta Cobrar Recuperación"])
+            st.dataframe(df_estilizado, use_container_width=True, hide_index=True)
+            
+        with col_grafico:
+            st.markdown("**Resumen de Omisiones**")
+            # Creamos un mini DataFrame para el gráfico
+            datos_grafico = pd.DataFrame({
+                "Concepto": ["Oxígeno", "Recuperación"],
+                "Alertas (Falta Cobrar)": [alertas_oxi, alertas_rec]
+            })
+            # Mostramos un gráfico de barras simple
+            st.bar_chart(data=datos_grafico.set_index("Concepto"), color="#ff4b4b")
+
+        # Botón de descarga
+        st.divider()
+        csv = df_resultados.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="📥 Descargar Reporte Completo en CSV",
+            data=csv,
+            file_name='reporte_auditoria_visual.csv',
+            mime='text/csv',
+            type="primary"
+        )
