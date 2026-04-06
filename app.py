@@ -6,16 +6,112 @@ import unicodedata
 from collections import defaultdict
 
 st.set_page_config(
-    page_title="Auditor de Cuentas Hospitalarias",
+    page_title="Auditor de Oxígeno",
     layout="wide",
-    page_icon="🏥"
+    page_icon="🏥",
 )
 
-st.title("🏥 Auditor de Oxígeno por Cuenta")
-st.markdown(
-    "Sube varios PDFs. La app agrupa por **cuenta**, consolida cobros de oxígeno "
-    "y muestra la **evidencia exacta** encontrada."
-)
+# =========================================================
+# CSS GLOBAL
+# =========================================================
+st.markdown("""
+<style>
+/* ── Tarjeta de cuenta ── */
+.cuenta-card {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 16px;
+    border: 0.5px solid var(--color-border-tertiary, #e0e0e0);
+    border-radius: 10px;
+    background: var(--color-background-primary, #fff);
+    margin-bottom: 8px;
+    cursor: default;
+}
+.dot {
+    width: 11px; height: 11px;
+    border-radius: 50%;
+    flex-shrink: 0;
+}
+.dot-ok   { background: #639922; }
+.dot-warn { background: #EF9F27; }
+.dot-err  { background: #E24B4A; }
+.dot-gray { background: #888780; }
+
+/* ── Badges de estado ── */
+.badge {
+    display: inline-flex; align-items: center;
+    font-size: 11px; font-weight: 500;
+    padding: 3px 9px; border-radius: 20px;
+    white-space: nowrap;
+}
+.badge-ok   { background:#EAF3DE; color:#27500A; }
+.badge-warn { background:#FAEEDA; color:#633806; }
+.badge-err  { background:#FCEBEB; color:#791F1F; }
+.badge-gray { background:#F1EFE8; color:#444441; }
+
+/* ── Barra de progreso ── */
+.bar-wrap {
+    background: #e8e8e4;
+    border-radius: 4px; height: 9px;
+    width: 100%; overflow: hidden; margin: 3px 0 2px;
+}
+.bar-fill { height: 100%; border-radius: 4px; }
+.bar-ok   { background: #639922; }
+.bar-warn { background: #EF9F27; }
+.bar-err  { background: #E24B4A; }
+.bar-gray { background: #888780; }
+
+/* ── Tarjeta métrica ── */
+.metric-card {
+    background: var(--color-background-secondary, #f5f5f0);
+    border-radius: 8px;
+    padding: 10px 14px;
+}
+.metric-card .mc-label {
+    font-size: 11px;
+    color: var(--color-text-secondary, #666);
+    margin-bottom: 2px;
+}
+.metric-card .mc-value {
+    font-size: 22px;
+    font-weight: 500;
+    line-height: 1.2;
+}
+.metric-card-danger { background: #FCEBEB; }
+.metric-card-danger .mc-label { color: #A32D2D; }
+.metric-card-danger .mc-value { color: #A32D2D; }
+
+/* ── Hallazgo / issue box ── */
+.finding-box {
+    border-left: 3px solid;
+    padding: 8px 12px;
+    border-radius: 0 6px 6px 0;
+    font-size: 13px;
+    margin-bottom: 6px;
+}
+.finding-err  { border-color:#E24B4A; background:#FCEBEB; color:#791F1F; }
+.finding-warn { border-color:#EF9F27; background:#FAEEDA; color:#633806; }
+.finding-ok   { border-color:#639922; background:#EAF3DE; color:#27500A; }
+.finding-gray { border-color:#888780; background:#F1EFE8; color:#444441; }
+
+/* ── Tabla de evidencia ── */
+.ev-table { width:100%; border-collapse:collapse; font-size:12px; }
+.ev-table th {
+    text-align:left; padding:5px 8px;
+    background:var(--color-background-tertiary,#f0f0ec);
+    border-bottom:0.5px solid var(--color-border-tertiary,#e0e0e0);
+    font-weight:500; color:var(--color-text-secondary,#666);
+}
+.ev-table td {
+    padding:5px 8px;
+    border-bottom:0.5px solid var(--color-border-tertiary,#e0e0e0);
+    color:var(--color-text-primary,#222);
+}
+.ev-table tr:last-child td { border-bottom:none; }
+.mono { font-family: var(--font-mono, monospace); font-size:11px; }
+</style>
+""", unsafe_allow_html=True)
 
 # =========================================================
 # UTILIDADES
@@ -40,12 +136,6 @@ def a_float_seguro(valor) -> float:
         return 0.0
 
 def extraer_texto_pdf(archivo_pdf) -> str:
-    """
-    Extrae texto de todas las páginas de un PDF.
-    Hace seek(0) antes de abrir para que el stream sea reutilizable
-    aunque Streamlit lo haya consumido parcialmente.
-    Advierte si alguna página no tiene texto extraíble.
-    """
     archivo_pdf.seek(0)
     partes = []
     try:
@@ -56,92 +146,62 @@ def extraer_texto_pdf(archivo_pdf) -> str:
                     partes.append(texto)
                 else:
                     st.warning(
-                        f"⚠️ '{getattr(archivo_pdf, 'name', '?')}' "
-                        f"— página {i} sin texto extraíble (¿PDF escaneado?)."
+                        f"⚠️ '{getattr(archivo_pdf,'name','?')}' "
+                        f"— página {i} sin texto extraíble."
                     )
     except Exception as e:
-        st.error(f"❌ Error al leer '{getattr(archivo_pdf, 'name', '?')}': {e}")
+        st.error(f"❌ Error al leer '{getattr(archivo_pdf,'name','?')}': {e}")
     return "\n".join(partes)
 
 def extraer_cuenta(texto: str) -> str:
-    # Busca patrón NCxxxxx en cualquier parte del texto
-    match = re.search(r"\bNC\d{5,}\b", texto, re.IGNORECASE)
-    if match:
-        return match.group(0).upper()
-
-    match = re.search(r"Cuenta[:\s]+(NC\d+)", texto, re.IGNORECASE)
-    if match:
-        return match.group(1).upper()
-
+    m = re.search(r"\bNC\d{5,}\b", texto, re.IGNORECASE)
+    if m:
+        return m.group(0).upper()
+    m = re.search(r"Cuenta[:\s]+(NC\d+)", texto, re.IGNORECASE)
+    if m:
+        return m.group(1).upper()
     return "SIN_CUENTA"
 
 def extraer_paciente(texto: str) -> str:
-    """
-    CORRECCIÓN: después de capturar la línea del nombre, elimina
-    todo lo que viene a partir de la fecha de nacimiento (YYYY-MM-DD
-    o DD-MM-YYYY) y demás datos demográficos que pdfplumber
-    concatena en la misma línea.
-    """
     nombre_crudo = None
-
-    # Formato estado de cuenta: línea bajo "Nombre Paciente … Fecha nacimiento:"
     m = re.search(
         r"Nombre Paciente\s+Fecha nacimiento:.*?\n(.+?)\n(?:Medico|Médico)",
-        texto,
-        re.IGNORECASE | re.DOTALL,
+        texto, re.IGNORECASE | re.DOTALL,
     )
     if m:
         nombre_crudo = compactar_espacios(m.group(1))
-
-    # Formato nota / servicios: "Nombre: … Fecha de nacimiento:"
     if not nombre_crudo:
         m = re.search(
             r"Nombre:\s*(.+?)\s*Fecha de nacimiento:",
-            texto,
-            re.IGNORECASE | re.DOTALL,
+            texto, re.IGNORECASE | re.DOTALL,
         )
         if m:
             nombre_crudo = compactar_espacios(m.group(1))
-
     if not nombre_crudo:
         return "No identificado"
-
-    # CORRECCIÓN Bug 3: recortar a partir de fecha de nacimiento en la cadena
-    # cubre YYYY-MM-DD y DD-MM-YYYY que aparecen pegados al nombre
     nombre_limpio = re.split(r"\s+\d{2,4}[-/]\d{2}[-/]\d{2,4}", nombre_crudo)[0]
-    # Por si quedó el año suelto al final: "NOMBRE 80 AÑOS Mujer"
     nombre_limpio = re.sub(r"\s+\d+\s+AÑO[S]?.*$", "", nombre_limpio, flags=re.IGNORECASE)
-    return compactar_espacios(nombre_limpio)
+    return compactar_espacios(nombre_limpio).title()
 
 def detectar_tipo_documento(texto: str) -> str:
     t = normalizar_texto(texto)
-
     if "servicios de cirugia" in t:
         return "servicios_cirugia"
-
     if "nota post-quirurgica" in t or "nota postquirurgica" in t:
         return "nota_postquirurgica"
-
     if "estado de cuenta" in t:
         corte = re.search(r"estado de cuenta corte a:\s*([a-z]+)", t)
         if corte:
             return f"estado_cuenta_{corte.group(1).upper()}"
         return "estado_cuenta"
-
     return "otro"
 
 def canonical_departamento(nombre: str) -> str:
     n = normalizar_texto(nombre)
-
-    if "quirofano" in n:
-        return "quirofano"
-    if "recuperacion" in n:
-        return "recuperacion"
-    if "hospitalizacion" in n:
-        return "hospitalizacion"
-    if "caja" in n:
-        return "caja"
-
+    if "quirofano" in n:   return "quirofano"
+    if "recuperacion" in n: return "recuperacion"
+    if "hospitalizacion" in n: return "hospitalizacion"
+    if "caja" in n:         return "caja"
     return "otro"
 
 # =========================================================
@@ -151,30 +211,19 @@ def extraer_bloques_departamento(texto: str):
     patron = re.compile(r"(?im)^Departamento:\s*(.*)$")
     matches = list(patron.finditer(texto))
     bloques = []
-
-    if not matches:
-        return bloques
-
     for i, match in enumerate(matches):
         encabezado = match.group(1).strip()
         inicio = match.end()
         fin = matches[i + 1].start() if i + 1 < len(matches) else len(texto)
-        contenido = texto[inicio:fin]
-
         bloques.append({
             "encabezado": encabezado,
             "departamento": canonical_departamento(encabezado),
-            "contenido": contenido,
+            "contenido": texto[inicio:fin],
         })
-
     return bloques
 
 # =========================================================
-# REGEX PRINCIPAL DE ÍTEMS
-#
-# CORRECCIÓN Bug 2: el bloque de fecha+folio ahora acepta que
-# vengan pegados (23-03-2026SER200735) o separados por espacio.
-# Se captura como un solo token "fecha_folio" y luego se separa.
+# REGEX PRINCIPAL
 # =========================================================
 ITEM_RE = re.compile(
     r"^(?P<codigo>[A-Z0-9-]+)\s+"
@@ -185,552 +234,525 @@ ITEM_RE = re.compile(
     r"(?P<subtotal>[\d,]+\.\d{2})\s+"
     r"(?P<impuesto>[\d,]+\.\d{2})\s+"
     r"(?P<total>[\d,]+\.\d{2})"
-    r"(?:\s+(?P<fecha_folio>\S+))?"   # ← captura "23-03-2026SER200735" o "23-03-2026"
-    r"(?:\s+(?P<folio2>\S+))?$",      # ← captura folio separado si viene con espacio
+    r"(?:\s+(?P<fecha_folio>\S+))?"
+    r"(?:\s+(?P<folio2>\S+))?$",
     re.IGNORECASE,
 )
 
-# Códigos de producto que representan oxígeno por hora.
-# Filtrar por código evita que mascarillas, circuitos y
-# otros insumos con "oxigeno" en la descripción sean contados.
 CODIGOS_OXIGENO = {"APR-0000003"}
 
 def es_linea_oxigeno(descripcion: str, codigo: str = "") -> bool:
-    """
-    CORRECCIÓN Bug 1: primero valida el código de producto.
-    Solo si el código pertenece a CODIGOS_OXIGENO (o si no se
-    proporciona código) se evalúa la descripción.
-    Esto excluye ítems como MASCARILLA PARA OXIGENO, CIRCUITO
-    ANESTESIA, etc., que contienen la palabra pero no son horas.
-    """
     if codigo and codigo.upper() not in CODIGOS_OXIGENO:
         return False
     return "oxigeno" in normalizar_texto(descripcion)
 
-def _parsear_fecha_folio(fecha_folio_raw: str | None, folio2_raw: str | None):
-    """
-    CORRECCIÓN Bug 2: separa fecha y folio que pdfplumber fusiona
-    sin espacio (ej. "23-03-2026SER200735").
-    Devuelve (fecha_str, folio_str).
-    """
+def _parsear_fecha_folio(fecha_folio_raw, folio2_raw):
     if not fecha_folio_raw:
         return "", ""
-
-    # Si viene con espacio el folio ya está en folio2
-    patron_fecha = re.compile(r"^\d{2}-\d{2}-\d{4}$")
-    if patron_fecha.match(fecha_folio_raw):
+    if re.match(r"^\d{2}-\d{2}-\d{4}$", fecha_folio_raw):
         return fecha_folio_raw, folio2_raw or ""
-
-    # Intenta separar los primeros 10 chars como fecha
     if len(fecha_folio_raw) > 10 and re.match(r"\d{2}-\d{2}-\d{4}", fecha_folio_raw):
-        fecha = fecha_folio_raw[:10]
-        folio = fecha_folio_raw[10:]
-        return fecha, folio
-
-    # No es una fecha: tratar todo como folio
+        return fecha_folio_raw[:10], fecha_folio_raw[10:]
     return "", fecha_folio_raw
 
 # =========================================================
-# EXTRACCIÓN FINA DE ÍTEMS DE OXÍGENO EN ESTADOS DE CUENTA
+# EXTRACCIÓN DE ÍTEMS DE OXÍGENO
 # =========================================================
-def extraer_items_oxigeno_estado_cuenta(
-    texto: str, nombre_archivo: str, tipo_doc: str, cuenta: str
-):
+def extraer_items_oxigeno_estado_cuenta(texto, nombre_archivo, tipo_doc, cuenta):
     items = []
-    bloques = extraer_bloques_departamento(texto)
-    sin_match_oxigeno = []  # para avisos de líneas sospechosas no capturadas
-
-    for bloque in bloques:
+    sin_match = []
+    for bloque in extraer_bloques_departamento(texto):
         depto = bloque["departamento"]
         if depto == "caja":
             continue
-
         for linea in bloque["contenido"].splitlines():
-            linea_limpia = compactar_espacios(linea)
-            if not linea_limpia:
+            lc = compactar_espacios(linea)
+            if not lc:
                 continue
-
-            m = ITEM_RE.match(linea_limpia)
-
-            # Aviso de depuración: línea con "oxigeno" que no matcheó el regex
+            m = ITEM_RE.match(lc)
             if not m:
-                if "oxigeno" in normalizar_texto(linea_limpia):
-                    sin_match_oxigeno.append(linea_limpia)
+                if "oxigeno" in normalizar_texto(lc):
+                    sin_match.append(lc)
                 continue
-
             codigo = m.group("codigo")
-            descripcion = m.group("descripcion")
-
-            if not es_linea_oxigeno(descripcion, codigo):
+            desc   = m.group("descripcion")
+            if not es_linea_oxigeno(desc, codigo):
                 continue
-
             fecha, folio = _parsear_fecha_folio(
                 m.group("fecha_folio"), m.group("folio2")
             )
-
             items.append({
-                "cuenta": cuenta,
-                "archivo": nombre_archivo,
-                "tipo_documento": tipo_doc,
-                "area": depto,
-                "codigo": codigo,
-                "descripcion": descripcion,
+                "cuenta": cuenta, "archivo": nombre_archivo,
+                "tipo_documento": tipo_doc, "area": depto,
+                "codigo": codigo, "descripcion": desc,
                 "cantidad": a_float_seguro(m.group("cantidad")),
                 "precio_unitario": a_float_seguro(m.group("precio")),
                 "subtotal": a_float_seguro(m.group("subtotal")),
-                "fecha": fecha,
-                "folio": folio,
-                "linea_original": linea_limpia,
+                "fecha": fecha, "folio": folio, "linea_original": lc,
             })
-
-    if sin_match_oxigeno:
+    if sin_match:
         st.warning(
-            f"⚠️ '{nombre_archivo}': {len(sin_match_oxigeno)} línea(s) con "
-            f"'oxígeno' no pudieron parsearse con ITEM_RE:\n"
-            + "\n".join(f"  • {l}" for l in sin_match_oxigeno)
+            f"⚠️ '{nombre_archivo}': {len(sin_match)} línea(s) con 'oxígeno' "
+            f"no pudieron parsearse."
         )
-
     return items
 
 # =========================================================
-# EXTRACCIÓN FINA DESDE SERVICIOS DE CIRUGÍA
+# EXTRACCIÓN SERVICIOS DE CIRUGÍA
 # =========================================================
-def extraer_evidencias_servicios_cirugia(
-    texto: str, nombre_archivo: str, cuenta: str
-):
+def extraer_evidencias_servicios_cirugia(texto, nombre_archivo, cuenta):
     evidencias = []
-    hora_total_quirofano = None
-
-    # pdfplumber fusiona las 3 columnas en una misma línea de texto;
-    # re.search encuentra el patrón donde sea dentro de la línea.
+    hora_total = None
     for linea in texto.splitlines():
         original = compactar_espacios(linea)
         if not original:
             continue
-
         n = normalizar_texto(original)
-
-        # Hora total de quirófano
-        m_total = re.search(
-            r"hora total de quirofano:\s*(\d+(?:\.\d+)?)\s*hrs?", n
-        )
-        if m_total:
-            hora_total_quirofano = a_float_seguro(m_total.group(1))
-
-        # Oxígeno en quirófano (columna ANESTESIA)
-        m_qx = re.search(r"oxigeno x hr\s+(\d+(?:\.\d+)?)\s*hrs?", n)
-        if m_qx:
+        m = re.search(r"hora total de quirofano:\s*(\d+(?:\.\d+)?)\s*hrs?", n)
+        if m:
+            hora_total = a_float_seguro(m.group(1))
+        m = re.search(r"oxigeno x hr\s+(\d+(?:\.\d+)?)\s*hrs?", n)
+        if m:
             evidencias.append({
-                "cuenta": cuenta,
-                "archivo": nombre_archivo,
-                "tipo_documento": "servicios_cirugia",
-                "area": "quirofano",
-                "cantidad_esperada": a_float_seguro(m_qx.group(1)),
+                "cuenta": cuenta, "archivo": nombre_archivo,
+                "tipo_documento": "servicios_cirugia", "area": "quirofano",
+                "cantidad_esperada": a_float_seguro(m.group(1)),
                 "linea_original": original,
             })
-
-        # Oxígeno en recuperación (columna RECUPERACIÓN)
-        m_rec = re.search(r"oxigeno recuperacion\s+(\d+(?:\.\d+)?)\s*hrs?", n)
-        if m_rec:
+        m = re.search(r"oxigeno recuperacion\s+(\d+(?:\.\d+)?)\s*hrs?", n)
+        if m:
             evidencias.append({
-                "cuenta": cuenta,
-                "archivo": nombre_archivo,
-                "tipo_documento": "servicios_cirugia",
-                "area": "recuperacion",
-                "cantidad_esperada": a_float_seguro(m_rec.group(1)),
+                "cuenta": cuenta, "archivo": nombre_archivo,
+                "tipo_documento": "servicios_cirugia", "area": "recuperacion",
+                "cantidad_esperada": a_float_seguro(m.group(1)),
                 "linea_original": original,
             })
-
-    esperado = {
-        "quirofano": 0.0,
-        "recuperacion": 0.0,
-        "hora_total_quirofano_documentada": hora_total_quirofano,
-    }
+    esperado = {"quirofano": 0.0, "recuperacion": 0.0,
+                "hora_total_quirofano_documentada": hora_total}
     for ev in evidencias:
         esperado[ev["area"]] += ev["cantidad_esperada"]
-
     return esperado, evidencias
 
 def extraer_tiempo_postquirurgico(texto: str):
-    t = normalizar_texto(texto)
-    t = compactar_espacios(t)
-    # Acepta "2hrs" sin espacio y "2 hrs" con espacio
+    t = compactar_espacios(normalizar_texto(texto))
     m = re.search(r"tiempo quirurgico:\s*(\d+(?:\.\d+)?)\s*hrs?", t)
-    if m:
-        return a_float_seguro(m.group(1))
-    return None
+    return a_float_seguro(m.group(1)) if m else None
 
 # =========================================================
 # CONSOLIDACIÓN
 # =========================================================
 def plantilla_cuenta():
     return {
-        "paciente": None,
-        "archivos": [],
-        "cobrado": {
-            "quirofano": 0.0,
-            "recuperacion": 0.0,
-            "hospitalizacion": 0.0,
-            "otro": 0.0,
-        },
-        "esperado": {
-            "quirofano": 0.0,
-            "recuperacion": 0.0,
-            "hora_total_quirofano_documentada": None,
-        },
-        "evidencias_cobro": [],
-        "evidencias_esperado": [],
+        "paciente": None, "archivos": [],
+        "cobrado": {"quirofano":0.0,"recuperacion":0.0,"hospitalizacion":0.0,"otro":0.0},
+        "esperado": {"quirofano":0.0,"recuperacion":0.0,"hora_total_quirofano_documentada":None},
+        "evidencias_cobro": [], "evidencias_esperado": [],
         "tiempo_postquirurgico": None,
     }
 
 @st.cache_data(show_spinner=False)
-def consolidar_por_cuenta(archivos_bytes: list[tuple[str, bytes]]):
-    """
-    CORRECCIÓN: recibe lista de (nombre, bytes) en vez de file objects,
-    lo que permite cachear con @st.cache_data y evita re-procesar
-    los PDFs en cada interacción de la UI.
-    """
+def consolidar_por_cuenta(archivos_bytes: list):
     import io
-
-    cuentas: dict = {}
-
+    cuentas = {}
     for nombre, contenido in archivos_bytes:
-        archivo_pdf = io.BytesIO(contenido)
-        archivo_pdf.name = nombre
-
-        texto = extraer_texto_pdf(archivo_pdf)
+        af = io.BytesIO(contenido)
+        af.name = nombre
+        texto = extraer_texto_pdf(af)
         if not texto:
             st.warning(f"⚠️ '{nombre}' no produjo texto; se omite.")
             continue
-
-        cuenta = extraer_cuenta(texto)
+        cuenta  = extraer_cuenta(texto)
         paciente = extraer_paciente(texto)
-        tipo = detectar_tipo_documento(texto)
-
-        # Aviso cuando no se puede identificar la cuenta
+        tipo    = detectar_tipo_documento(texto)
         if cuenta == "SIN_CUENTA":
-            st.warning(
-                f"⚠️ No se encontró número de cuenta (NCxxxxx) en '{nombre}'. "
-                f"Los datos se agruparán bajo 'SIN_CUENTA'."
-            )
-
-        # Aviso cuando el tipo de documento no se reconoce
+            st.warning(f"⚠️ Sin número de cuenta (NCxxxxx) en '{nombre}'.")
         if tipo == "otro":
-            st.info(
-                f"ℹ️ '{nombre}' no coincide con ningún tipo conocido "
-                f"(estado de cuenta / servicios de cirugía / nota post-quirúrgica). "
-                f"Se registra pero no aporta datos de oxígeno."
-            )
-
+            st.info(f"ℹ️ '{nombre}' no coincide con ningún tipo conocido.")
         if cuenta not in cuentas:
             cuentas[cuenta] = plantilla_cuenta()
-
-        if (
-            cuentas[cuenta]["paciente"] in (None, "No identificado")
-            and paciente != "No identificado"
-        ):
+        if cuentas[cuenta]["paciente"] in (None,"No identificado") and paciente != "No identificado":
             cuentas[cuenta]["paciente"] = paciente
-
-        cuentas[cuenta]["archivos"].append(
-            {"archivo": nombre, "tipo_documento": tipo}
-        )
+        cuentas[cuenta]["archivos"].append({"archivo":nombre,"tipo_documento":tipo})
 
         if tipo.startswith("estado_cuenta"):
-            items = extraer_items_oxigeno_estado_cuenta(
-                texto=texto,
-                nombre_archivo=nombre,
-                tipo_doc=tipo,
-                cuenta=cuenta,
-            )
+            items = extraer_items_oxigeno_estado_cuenta(texto,nombre,tipo,cuenta)
             cuentas[cuenta]["evidencias_cobro"].extend(items)
-
             for item in items:
-                area = item["area"]
-                if area not in cuentas[cuenta]["cobrado"]:
-                    area = "otro"
+                area = item["area"] if item["area"] in cuentas[cuenta]["cobrado"] else "otro"
                 cuentas[cuenta]["cobrado"][area] += item["cantidad"]
-
         elif tipo == "servicios_cirugia":
-            esperado_doc, evidencias_doc = extraer_evidencias_servicios_cirugia(
-                texto=texto,
-                nombre_archivo=nombre,
-                cuenta=cuenta,
-            )
-            cuentas[cuenta]["esperado"]["quirofano"] += esperado_doc["quirofano"]
-            cuentas[cuenta]["esperado"]["recuperacion"] += esperado_doc["recuperacion"]
-
+            esp, evs = extraer_evidencias_servicios_cirugia(texto,nombre,cuenta)
+            cuentas[cuenta]["esperado"]["quirofano"]    += esp["quirofano"]
+            cuentas[cuenta]["esperado"]["recuperacion"] += esp["recuperacion"]
             if cuentas[cuenta]["esperado"]["hora_total_quirofano_documentada"] is None:
-                cuentas[cuenta]["esperado"][
-                    "hora_total_quirofano_documentada"
-                ] = esperado_doc["hora_total_quirofano_documentada"]
-
-            cuentas[cuenta]["evidencias_esperado"].extend(evidencias_doc)
-
+                cuentas[cuenta]["esperado"]["hora_total_quirofano_documentada"] = esp["hora_total_quirofano_documentada"]
+            cuentas[cuenta]["evidencias_esperado"].extend(evs)
         elif tipo == "nota_postquirurgica":
-            cuentas[cuenta]["tiempo_postquirurgico"] = extraer_tiempo_postquirurgico(
-                texto
-            )
-
+            cuentas[cuenta]["tiempo_postquirurgico"] = extraer_tiempo_postquirurgico(texto)
     return cuentas
 
 # =========================================================
 # EVALUACIÓN
 # =========================================================
-def evaluar_diferencia(cobrado: float, esperado, tolerancia: float = 0.01):
+def evaluar(cobrado: float, esperado, tolerancia: float = 0.01):
+    """Devuelve (estado, diff, clase_css)"""
     if esperado is None:
-        return "SIN REGLA", None
-
+        return "sin regla", None, "gray"
     diff = round(cobrado - esperado, 2)
-
     if abs(diff) <= tolerancia:
-        return "✅ OK", diff
+        return "ok", diff, "ok"
     if diff < 0:
-        return f"⚠️ FALTAN {abs(diff):.2f} HRS", diff
-    return f"🔴 SOBRAN {abs(diff):.2f} HRS", diff
-
-def construir_resumen(cuentas: dict) -> pd.DataFrame:
-    filas = []
-
-    for cuenta, data in cuentas.items():
-        cob_qx   = round(data["cobrado"]["quirofano"], 2)
-        cob_rec  = round(data["cobrado"]["recuperacion"], 2)
-        cob_hosp = round(data["cobrado"]["hospitalizacion"], 2)
-
-        esp_qx  = round(data["esperado"]["quirofano"], 2)
-        esp_rec = round(data["esperado"]["recuperacion"], 2)
-
-        esp_total_qx = round(esp_qx + esp_rec, 2)
-        cob_total_qx = round(cob_qx + cob_rec, 2)
-        cob_total    = round(cob_qx + cob_rec + cob_hosp, 2)
-
-        status_qx,    diff_qx    = evaluar_diferencia(cob_qx,   esp_qx)
-        status_rec,   diff_rec   = evaluar_diferencia(cob_rec,  esp_rec)
-        status_total, diff_total = evaluar_diferencia(cob_total_qx, esp_total_qx)
-
-        filas.append({
-            "Cuenta":                      cuenta,
-            "Paciente":                    data["paciente"],
-            "Archivos":                    len(data["archivos"]),
-            "Esperado QX":                 esp_qx,
-            "Cobrado QX":                  cob_qx,
-            "Dif. QX":                     diff_qx,
-            "Status QX":                   status_qx,
-            "Esperado Recuperación":       esp_rec,
-            "Cobrado Recuperación":        cob_rec,
-            "Dif. Recuperación":           diff_rec,
-            "Status Recuperación":         status_rec,
-            "Cobrado Hospitalización":     cob_hosp,
-            "Esperado Total Quirúrgico":   esp_total_qx,
-            "Cobrado Total Quirúrgico":    cob_total_qx,
-            "Dif. Total Quirúrgico":       diff_total,
-            "Status Total Quirúrgico":     status_total,
-            "Cobrado Total Cuenta":        cob_total,
-            "Hora total QX doc.":          data["esperado"]["hora_total_quirofano_documentada"],
-            "Tiempo Postquirúrgico":       data["tiempo_postquirurgico"],
-        })
-
-    return pd.DataFrame(filas)
-
-def df_evidencias_cobro(cuenta_data: dict) -> pd.DataFrame:
-    if not cuenta_data["evidencias_cobro"]:
-        return pd.DataFrame(
-            columns=[
-                "archivo", "tipo_documento", "area", "codigo", "descripcion",
-                "cantidad", "fecha", "folio", "linea_original",
-            ]
-        )
-    return pd.DataFrame(cuenta_data["evidencias_cobro"])
-
-def df_evidencias_esperado(cuenta_data: dict) -> pd.DataFrame:
-    if not cuenta_data["evidencias_esperado"]:
-        return pd.DataFrame(
-            columns=[
-                "archivo", "tipo_documento", "area",
-                "cantidad_esperada", "linea_original",
-            ]
-        )
-    return pd.DataFrame(cuenta_data["evidencias_esperado"])
+        return f"faltan {abs(diff):.2f} hrs", diff, "warn"
+    return f"sobran {abs(diff):.2f} hrs", diff, "err"
 
 # =========================================================
-# UI
+# COMPONENTES DE UI REUTILIZABLES
 # =========================================================
-tolerancia_ui = st.sidebar.slider(
-    "Tolerancia (hrs)",
-    min_value=0.0,
-    max_value=0.5,
-    value=0.01,
-    step=0.01,
-    help="Diferencia máxima entre cobrado y esperado para considerar el cobro como correcto.",
+def badge_html(texto: str, clase: str) -> str:
+    return f'<span class="badge badge-{clase}">{texto}</span>'
+
+def dot_html(clase: str) -> str:
+    return f'<span class="dot dot-{clase}"></span>'
+
+def barra_html(cobrado: float, esperado, clase: str) -> str:
+    if not esperado or esperado == 0:
+        pct = 100
+    else:
+        pct = min(round(cobrado / esperado * 100), 100)
+    return (
+        f'<div class="bar-wrap">'
+        f'<div class="bar-fill bar-{clase}" style="width:{pct}%"></div>'
+        f'</div>'
+    )
+
+def render_area(label: str, cobrado: float, esperado, tolerancia: float):
+    estado, diff, clase = evaluar(cobrado, esperado, tolerancia)
+    if esperado is not None:
+        subtitulo = f"Cobrado {cobrado:.2f} de {esperado:.2f} esperadas"
+    else:
+        subtitulo = f"Cobrado {cobrado:.2f} hrs — sin documento de referencia"
+
+    st.markdown(
+        f'<div style="display:flex;justify-content:space-between;'
+        f'align-items:center;margin-top:10px;margin-bottom:2px">'
+        f'<span style="font-size:13px;font-weight:500">{label}</span>'
+        f'{badge_html(estado.upper() if estado=="ok" else estado, clase)}'
+        f'</div>'
+        f'{barra_html(cobrado, esperado, clase)}'
+        f'<div style="font-size:11px;color:var(--color-text-secondary);'
+        f'margin-bottom:6px">{subtitulo}</div>',
+        unsafe_allow_html=True,
+    )
+
+def render_evidencia_cobro(items: list):
+    if not items:
+        st.markdown(
+            '<p style="font-size:12px;color:var(--color-text-secondary)">'
+            'No se encontraron líneas de oxígeno cobradas.</p>',
+            unsafe_allow_html=True,
+        )
+        return
+    filas = ""
+    for it in items:
+        filas += (
+            f"<tr>"
+            f"<td>{it['area'].capitalize()}</td>"
+            f"<td class='mono'>{it['codigo']}</td>"
+            f"<td>{it['descripcion']}</td>"
+            f"<td style='text-align:right;font-weight:500'>{it['cantidad']:.3f}</td>"
+            f"<td>{it['fecha']}</td>"
+            f"<td class='mono'>{it['folio']}</td>"
+            f"</tr>"
+        )
+    st.markdown(
+        f'<table class="ev-table">'
+        f'<thead><tr>'
+        f'<th>Área</th><th>Código</th><th>Descripción</th>'
+        f'<th style="text-align:right">Cant.</th><th>Fecha</th><th>Folio</th>'
+        f'</tr></thead><tbody>{filas}</tbody></table>',
+        unsafe_allow_html=True,
+    )
+
+def render_evidencia_esperada(items: list):
+    if not items:
+        st.markdown(
+            '<p style="font-size:12px;color:var(--color-text-secondary)">'
+            'No se encontró hoja de servicios de cirugía.</p>',
+            unsafe_allow_html=True,
+        )
+        return
+    filas = ""
+    for it in items:
+        filas += (
+            f"<tr>"
+            f"<td>{it['area'].capitalize()}</td>"
+            f"<td style='text-align:right;font-weight:500'>{it['cantidad_esperada']:.2f}</td>"
+            f"<td class='mono'>{it['linea_original']}</td>"
+            f"</tr>"
+        )
+    st.markdown(
+        f'<table class="ev-table">'
+        f'<thead><tr>'
+        f'<th>Área</th><th style="text-align:right">Hrs esperadas</th>'
+        f'<th>Línea original</th>'
+        f'</tr></thead><tbody>{filas}</tbody></table>',
+        unsafe_allow_html=True,
+    )
+
+def estado_global_cuenta(data: dict, tolerancia: float):
+    """Devuelve (estado_texto, clase_css) para la tarjeta de la cuenta."""
+    _, _, clase_qx  = evaluar(data["cobrado"]["quirofano"],   data["esperado"]["quirofano"],   tolerancia)
+    _, _, clase_rec = evaluar(data["cobrado"]["recuperacion"], data["esperado"]["recuperacion"], tolerancia)
+    for clase in ("err", "warn"):
+        if clase_qx == clase or clase_rec == clase:
+            if clase == "err":
+                return "Con diferencias", "err"
+            return "Revisar", "warn"
+    if data["esperado"]["quirofano"] == 0 and data["esperado"]["recuperacion"] == 0:
+        return "Sin referencia", "gray"
+    return "Sin diferencias", "ok"
+
+ETIQUETAS_AREA = {
+    "quirofano": "Quirófano",
+    "recuperacion": "Recuperación",
+    "hospitalizacion": "Hospitalización",
+}
+
+# =========================================================
+# SIDEBAR
+# =========================================================
+with st.sidebar:
+    st.markdown("### ⚙️ Configuración")
+    tolerancia_ui = st.slider(
+        "Tolerancia (hrs)",
+        min_value=0.0, max_value=0.5, value=0.01, step=0.01,
+        help="Diferencia máxima entre cobrado y esperado para marcar como OK.",
+    )
+    st.markdown("---")
+    st.markdown(
+        "**Tipos de documento reconocidos:**\n"
+        "- Estado de cuenta (corte)\n"
+        "- Servicios de cirugía\n"
+        "- Nota post-quirúrgica"
+    )
+
+# =========================================================
+# ENCABEZADO
+# =========================================================
+st.title("🏥 Auditor de Oxígeno por Cuenta")
+st.markdown(
+    "Sube los PDFs de una o varias cuentas. "
+    "La app detecta diferencias entre el oxígeno **cobrado** "
+    "(estados de cuenta) y el **esperado** (servicios de cirugía)."
 )
 
+# =========================================================
+# UPLOAD
+# =========================================================
 archivos_subidos = st.file_uploader(
     "Selecciona los documentos PDF",
     type=["pdf"],
     accept_multiple_files=True,
 )
 
-if archivos_subidos:
-    # Convertir a lista serializable para que @st.cache_data funcione
-    archivos_bytes = [(f.name, f.read()) for f in archivos_subidos]
+if not archivos_subidos:
+    st.info("Sube uno o más archivos PDF para comenzar el análisis.")
+    st.stop()
 
-    with st.spinner(f"Analizando {len(archivos_bytes)} archivo(s)..."):
-        cuentas = consolidar_por_cuenta(archivos_bytes)
-        df_resumen = construir_resumen(cuentas)
+archivos_bytes = [(f.name, f.read()) for f in archivos_subidos]
 
-    # Re-evaluar diferencias con la tolerancia elegida en la UI
-    for col_status, col_cob, col_esp in [
-        ("Status QX",              "Cobrado QX",              "Esperado QX"),
-        ("Status Recuperación",    "Cobrado Recuperación",    "Esperado Recuperación"),
-        ("Status Total Quirúrgico","Cobrado Total Quirúrgico","Esperado Total Quirúrgico"),
-    ]:
-        df_resumen[col_status] = df_resumen.apply(
-            lambda r: evaluar_diferencia(r[col_cob], r[col_esp], tolerancia_ui)[0],
-            axis=1,
-        )
+with st.spinner(f"Analizando {len(archivos_bytes)} archivo(s)…"):
+    cuentas = consolidar_por_cuenta(archivos_bytes)
 
-    st.subheader("Resumen por cuenta")
-    st.dataframe(df_resumen, use_container_width=True, hide_index=True)
+# =========================================================
+# MÉTRICAS GLOBALES
+# =========================================================
+total_cuentas    = len(cuentas)
+cuentas_con_diff = sum(
+    1 for d in cuentas.values()
+    if estado_global_cuenta(d, tolerancia_ui)[1] in ("err","warn")
+)
+total_hrs_qx   = sum(d["cobrado"]["quirofano"]    for d in cuentas.values())
+total_hrs_rec  = sum(d["cobrado"]["recuperacion"] for d in cuentas.values())
+total_hrs_hosp = sum(d["cobrado"]["hospitalizacion"] for d in cuentas.values())
 
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Cuentas analizadas",              len(df_resumen))
-    col2.metric("Oxígeno QX cobrado",              f"{df_resumen['Cobrado QX'].sum():.2f} hrs")
-    col3.metric("Oxígeno recuperación cobrado",    f"{df_resumen['Cobrado Recuperación'].sum():.2f} hrs")
-    col4.metric("Oxígeno hospitalización cobrado", f"{df_resumen['Cobrado Hospitalización'].sum():.2f} hrs")
+col1, col2, col3, col4, col5 = st.columns(5)
+col1.metric("Cuentas analizadas",    total_cuentas)
+col2.metric("Con diferencias",       cuentas_con_diff,
+            delta=None if cuentas_con_diff == 0 else f"{cuentas_con_diff} cuenta(s)",
+            delta_color="inverse")
+col3.metric("Hrs QX cobradas",       f"{total_hrs_qx:.2f}")
+col4.metric("Hrs recuperación",      f"{total_hrs_rec:.2f}")
+col5.metric("Hrs hospitalización",   f"{total_hrs_hosp:.2f}")
 
-    # Alerta si alguna cuenta no pudo identificarse
-    sin_cuenta = df_resumen[df_resumen["Cuenta"] == "SIN_CUENTA"]
-    if not sin_cuenta.empty:
-        st.error(
-            f"🔴 {len(sin_cuenta)} cuenta(s) sin número identificado (SIN_CUENTA). "
-            f"Revisa que los PDFs contengan el patrón NCxxxxx."
-        )
+st.divider()
 
-    st.divider()
-    st.subheader("Detalle fino por cuenta")
+# =========================================================
+# LISTA DE CUENTAS CON SEMÁFORO
+# =========================================================
+st.subheader("Resumen por cuenta")
 
-    for cuenta in df_resumen["Cuenta"].tolist():
-        data = cuentas[cuenta]
-        row  = df_resumen[df_resumen["Cuenta"] == cuenta].iloc[0]
+for cuenta, data in cuentas.items():
+    estado_txt, clase = estado_global_cuenta(data, tolerancia_ui)
+    paciente = data["paciente"] or "No identificado"
+    n_archivos = len(data["archivos"])
 
-        with st.expander(f"Cuenta {cuenta} · {data['paciente']}"):
-            col_a, col_b, col_c = st.columns(3)
-            col_a.metric("Status total quirúrgico",  row["Status Total Quirúrgico"])
-            col_b.metric("Cobrado total quirúrgico",  f"{row['Cobrado Total Quirúrgico']:.2f} hrs")
-            col_c.metric("Cobrado hospitalización",   f"{row['Cobrado Hospitalización']:.2f} hrs")
-
-            if data["tiempo_postquirurgico"] is not None:
-                st.caption(
-                    f"⏱️ Tiempo quirúrgico (nota post-qx): "
-                    f"{data['tiempo_postquirurgico']} hrs"
-                )
-
-            st.markdown("**Conciliación por área**")
-            conciliacion = pd.DataFrame([
-                {
-                    "Área": "Quirófano",
-                    "Esperado": row["Esperado QX"],
-                    "Cobrado":  row["Cobrado QX"],
-                    "Diferencia": row["Dif. QX"],
-                    "Status":   row["Status QX"],
-                },
-                {
-                    "Área": "Recuperación",
-                    "Esperado": row["Esperado Recuperación"],
-                    "Cobrado":  row["Cobrado Recuperación"],
-                    "Diferencia": row["Dif. Recuperación"],
-                    "Status":   row["Status Recuperación"],
-                },
-                {
-                    "Área": "Hospitalización",
-                    "Esperado": None,
-                    "Cobrado":  row["Cobrado Hospitalización"],
-                    "Diferencia": None,
-                    "Status":   "SIN REGLA",
-                },
-                {
-                    "Área": "Total Quirúrgico",
-                    "Esperado": row["Esperado Total Quirúrgico"],
-                    "Cobrado":  row["Cobrado Total Quirúrgico"],
-                    "Diferencia": row["Dif. Total Quirúrgico"],
-                    "Status":   row["Status Total Quirúrgico"],
-                },
-            ])
-            st.dataframe(conciliacion, use_container_width=True, hide_index=True)
-
-            st.markdown("**Evidencia esperada (Servicios de cirugía)**")
-            df_esp = df_evidencias_esperado(data)
-            if not df_esp.empty:
-                st.dataframe(
-                    df_esp[["archivo", "tipo_documento", "area",
-                             "cantidad_esperada", "linea_original"]],
-                    use_container_width=True,
-                    hide_index=True,
-                )
-            else:
-                st.info("No se encontró hoja de servicios de cirugía para esta cuenta.")
-
-            st.markdown("**Evidencia cobrada (Estados de cuenta)**")
-            df_cob = df_evidencias_cobro(data)
-            if not df_cob.empty:
-                st.dataframe(
-                    df_cob[[
-                        "archivo", "tipo_documento", "area", "codigo",
-                        "descripcion", "cantidad", "fecha", "folio",
-                        "linea_original",
-                    ]],
-                    use_container_width=True,
-                    hide_index=True,
-                )
-
-                st.markdown("**Totales de evidencia cobrada por área**")
-                resumen_ev = (
-                    df_cob.groupby("area", as_index=False)["cantidad"]
-                    .sum()
-                    .rename(columns={"cantidad": "horas_detectadas"})
-                )
-                st.dataframe(resumen_ev, use_container_width=True, hide_index=True)
-            else:
-                st.info(
-                    "No se encontraron líneas cobradas de oxígeno "
-                    "en los estados de cuenta."
-                )
-
-    st.divider()
-
-    # ── Descargas ──────────────────────────────────────────
-    csv_resumen = df_resumen.to_csv(index=False).encode("utf-8")
-    st.download_button(
-        label="📥 Descargar resumen",
-        data=csv_resumen,
-        file_name="reporte_resumen_oxigeno.csv",
-        mime="text/csv",
+    # ── Tarjeta de cuenta (siempre visible) ─────────────
+    st.markdown(
+        f'<div class="cuenta-card">'
+        f'{dot_html(clase)}'
+        f'<div style="flex:1">'
+        f'<span style="font-weight:500;font-size:14px">{cuenta}</span>'
+        f'<span style="color:var(--color-text-secondary);font-size:13px;'
+        f'margin-left:10px">{paciente}</span>'
+        f'</div>'
+        f'<span style="font-size:11px;color:var(--color-text-tertiary);'
+        f'margin-right:12px">{n_archivos} archivo(s)</span>'
+        f'{badge_html(estado_txt, clase)}'
+        f'</div>',
+        unsafe_allow_html=True,
     )
 
-    todas_cobro    = []
-    todas_esperado = []
+    # ── Detalle expandible ───────────────────────────────
+    with st.expander(f"Ver detalle → {cuenta}"):
 
-    for data in cuentas.values():
-        todas_cobro.extend(data["evidencias_cobro"])
-        todas_esperado.extend(data["evidencias_esperado"])
+        # 1. HALLAZGOS (lo primero que ve el auditor)
+        st.markdown("#### Hallazgos")
+        areas_auditadas = [
+            ("quirofano",    "Quirófano"),
+            ("recuperacion", "Recuperación"),
+        ]
+        hay_hallazgos = False
+        for area_key, area_label in areas_auditadas:
+            cob = round(data["cobrado"][area_key], 2)
+            esp = data["esperado"][area_key]
+            estado, diff, clase_area = evaluar(cob, esp, tolerancia_ui)
+            if clase_area == "ok":
+                msg = f"<b>{area_label}:</b> {cob:.2f} hrs cobradas = {esp:.2f} esperadas — sin diferencia."
+                st.markdown(f'<div class="finding-box finding-ok">{msg}</div>', unsafe_allow_html=True)
+            elif clase_area in ("warn", "err"):
+                hay_hallazgos = True
+                signo = "faltan" if diff < 0 else "sobran"
+                msg = (
+                    f"<b>{area_label}:</b> cobrado {cob:.2f} hrs, "
+                    f"esperado {esp:.2f} hrs — "
+                    f"<b>{signo} {abs(diff):.2f} hrs.</b>"
+                )
+                st.markdown(f'<div class="finding-box finding-{clase_area}">{msg}</div>', unsafe_allow_html=True)
+            else:
+                msg = f"<b>{area_label}:</b> sin documento de servicios de cirugía — no se puede comparar."
+                st.markdown(f'<div class="finding-box finding-gray">{msg}</div>', unsafe_allow_html=True)
 
+        hosp = round(data["cobrado"]["hospitalizacion"], 2)
+        if hosp > 0:
+            st.markdown(
+                f'<div class="finding-box finding-gray">'
+                f'<b>Hospitalización:</b> {hosp:.2f} hrs cobradas — sin regla de comparación.</div>',
+                unsafe_allow_html=True,
+            )
+
+        if data["tiempo_postquirurgico"] is not None:
+            st.markdown(
+                f'<div class="finding-box finding-gray">'
+                f'<b>Tiempo quirúrgico (nota post-qx):</b> '
+                f'{data["tiempo_postquirurgico"]} hrs documentadas.</div>',
+                unsafe_allow_html=True,
+            )
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # 2. BARRAS COBRADO VS ESPERADO
+        st.markdown("#### Cobrado vs esperado por área")
+        render_area("Quirófano",   data["cobrado"]["quirofano"],    data["esperado"]["quirofano"],    tolerancia_ui)
+        render_area("Recuperación",data["cobrado"]["recuperacion"], data["esperado"]["recuperacion"], tolerancia_ui)
+        if hosp > 0:
+            render_area("Hospitalización", hosp, None, tolerancia_ui)
+
+        st.markdown("<br>", unsafe_allow_html=True)
+
+        # 3. EVIDENCIA EN DOS COLUMNAS
+        col_esp, col_cob = st.columns(2)
+
+        with col_esp:
+            st.markdown("**Horas esperadas** *(servicios de cirugía)*")
+            render_evidencia_esperada(data["evidencias_esperado"])
+
+        with col_cob:
+            st.markdown("**Horas cobradas** *(estados de cuenta)*")
+            render_evidencia_cobro(data["evidencias_cobro"])
+
+        # 4. ARCHIVOS PROCESADOS
+        with st.expander("📄 Archivos procesados en esta cuenta"):
+            for af in data["archivos"]:
+                tipo_label = {
+                    "servicios_cirugia": "Servicios de cirugía",
+                    "nota_postquirurgica": "Nota post-quirúrgica",
+                    "otro": "Tipo no reconocido",
+                }.get(af["tipo_documento"],
+                      af["tipo_documento"].replace("estado_cuenta_","Estado de cuenta — corte "))
+                st.markdown(f"- `{af['archivo']}` → {tipo_label}")
+
+st.divider()
+
+# =========================================================
+# DESCARGAS
+# =========================================================
+st.subheader("📥 Exportar datos")
+
+# Construir DataFrame de resumen
+filas = []
+for cuenta, data in cuentas.items():
+    cob_qx   = round(data["cobrado"]["quirofano"], 2)
+    cob_rec  = round(data["cobrado"]["recuperacion"], 2)
+    cob_hosp = round(data["cobrado"]["hospitalizacion"], 2)
+    esp_qx   = round(data["esperado"]["quirofano"], 2)
+    esp_rec  = round(data["esperado"]["recuperacion"], 2)
+    estado_qx,  diff_qx,  _ = evaluar(cob_qx,  esp_qx,  tolerancia_ui)
+    estado_rec, diff_rec, _ = evaluar(cob_rec, esp_rec, tolerancia_ui)
+    estado_tot, diff_tot, _ = evaluar(cob_qx+cob_rec, esp_qx+esp_rec, tolerancia_ui)
+    filas.append({
+        "Cuenta": cuenta,
+        "Paciente": data["paciente"],
+        "Cobrado QX": cob_qx, "Esperado QX": esp_qx,
+        "Diferencia QX": diff_qx, "Status QX": estado_qx,
+        "Cobrado Recuperación": cob_rec, "Esperado Recuperación": esp_rec,
+        "Diferencia Recuperación": diff_rec, "Status Recuperación": estado_rec,
+        "Cobrado Hospitalización": cob_hosp,
+        "Diferencia Total Quirúrgico": diff_tot,
+        "Status Total Quirúrgico": estado_tot,
+        "Hora total QX doc.": data["esperado"]["hora_total_quirofano_documentada"],
+        "Tiempo Postquirúrgico": data["tiempo_postquirurgico"],
+    })
+df_resumen = pd.DataFrame(filas)
+
+col_d1, col_d2, col_d3 = st.columns(3)
+
+with col_d1:
+    st.download_button(
+        label="Resumen por cuenta (CSV)",
+        data=df_resumen.to_csv(index=False).encode("utf-8"),
+        file_name="resumen_oxigeno.csv", mime="text/csv",
+    )
+
+todas_cobro = [it for d in cuentas.values() for it in d["evidencias_cobro"]]
+todas_esp   = [it for d in cuentas.values() for it in d["evidencias_esperado"]]
+
+with col_d2:
     if todas_cobro:
-        csv_cobro = pd.DataFrame(todas_cobro).to_csv(index=False).encode("utf-8")
         st.download_button(
-            label="📥 Descargar evidencia cobrada",
-            data=csv_cobro,
-            file_name="reporte_evidencia_cobrada_oxigeno.csv",
-            mime="text/csv",
+            label="Evidencia cobrada (CSV)",
+            data=pd.DataFrame(todas_cobro).to_csv(index=False).encode("utf-8"),
+            file_name="evidencia_cobrada_oxigeno.csv", mime="text/csv",
         )
     else:
-        st.info("No hay evidencia cobrada de oxígeno en los archivos subidos.")
+        st.caption("Sin evidencia cobrada para exportar.")
 
-    if todas_esperado:
-        csv_esp = pd.DataFrame(todas_esperado).to_csv(index=False).encode("utf-8")
+with col_d3:
+    if todas_esp:
         st.download_button(
-            label="📥 Descargar evidencia esperada",
-            data=csv_esp,
-            file_name="reporte_evidencia_esperada_oxigeno.csv",
-            mime="text/csv",
+            label="Evidencia esperada (CSV)",
+            data=pd.DataFrame(todas_esp).to_csv(index=False).encode("utf-8"),
+            file_name="evidencia_esperada_oxigeno.csv", mime="text/csv",
         )
     else:
-        st.info("No hay evidencia esperada de oxígeno en los archivos subidos.")
+        st.caption("Sin evidencia esperada para exportar.")
