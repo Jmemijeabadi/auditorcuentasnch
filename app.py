@@ -3,6 +3,11 @@ import pdfplumber
 import pandas as pd
 import re
 import unicodedata
+import smtplib
+import hashlib
+import traceback
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from datetime import datetime
 from collections import defaultdict
 
@@ -890,6 +895,211 @@ def render_auditoria(audit: dict):
                 render_tabla_items(items_cob, COLS_COBRO)
 
 # =========================================================
+# LOG POR EMAIL  (invisible al usuario)
+# =========================================================
+def _hash_archivos(archivos_bytes: list) -> str:
+    """Genera un hash único por combinación de archivos subidos."""
+    h = hashlib.md5()
+    for nombre, contenido in archivos_bytes:
+        h.update(nombre.encode())
+        h.update(contenido[:256])   # primeros bytes bastan para identificar
+    return h.hexdigest()
+
+def _construir_html_log(
+    cuentas: dict,
+    todas_auditorias: dict,
+    archivos_bytes: list,
+    timestamp: str,
+) -> str:
+    """Construye el cuerpo HTML del correo de log."""
+
+    ICON = {"ok": "✅", "err": "❌", "warn": "⚠️", "gray": "ℹ️"}
+    COLOR = {"ok": "#27500A", "err": "#791F1F", "warn": "#633806", "gray": "#444441"}
+    BG    = {"ok": "#EAF3DE", "err": "#FCEBEB", "warn": "#FAEEDA", "gray": "#F1EFE8"}
+
+    # ── Resumen global ────────────────────────────────────
+    total = len(cuentas)
+    con_err  = sum(1 for auds in todas_auditorias.values()
+                   if any(a["clase"] == "err"  for a in auds))
+    con_warn = sum(1 for auds in todas_auditorias.values()
+                   if any(a["clase"] == "warn" for a in auds))
+    sin_diff = total - con_err - con_warn
+
+    archivos_lista = "".join(
+        f"<li style='font-size:12px;color:#555'>{n}</li>"
+        for n, _ in archivos_bytes
+    )
+
+    html = f"""
+    <html><body style="font-family:Arial,sans-serif;max-width:800px;margin:0 auto;color:#222">
+
+    <h2 style="border-bottom:2px solid #185FA5;padding-bottom:8px;color:#185FA5">
+      🏥 Log de auditoría hospitalaria
+    </h2>
+
+    <p style="color:#555;font-size:13px">
+      <b>Fecha y hora:</b> {timestamp}<br>
+      <b>Archivos procesados ({len(archivos_bytes)}):</b>
+    </p>
+    <ul style="margin:0 0 16px">{archivos_lista}</ul>
+
+    <table style="border-collapse:collapse;width:100%;font-size:13px;margin-bottom:24px">
+      <tr style="background:#185FA5;color:#fff">
+        <td style="padding:8px 12px">Cuentas analizadas</td>
+        <td style="padding:8px 12px">Con errores críticos</td>
+        <td style="padding:8px 12px">Con advertencias</td>
+        <td style="padding:8px 12px">Sin diferencias</td>
+      </tr>
+      <tr style="background:#f5f5f5">
+        <td style="padding:8px 12px;text-align:center;font-weight:bold">{total}</td>
+        <td style="padding:8px 12px;text-align:center;color:#791F1F;font-weight:bold">{con_err}</td>
+        <td style="padding:8px 12px;text-align:center;color:#633806;font-weight:bold">{con_warn}</td>
+        <td style="padding:8px 12px;text-align:center;color:#27500A;font-weight:bold">{sin_diff}</td>
+      </tr>
+    </table>
+    """
+
+    # ── Detalle por cuenta ────────────────────────────────
+    for cuenta, data in cuentas.items():
+        auds       = todas_auditorias[cuenta]
+        estado_txt, clase = estado_global(auds)
+        n_err  = sum(1 for a in auds if a["clase"] == "err")
+        n_warn = sum(1 for a in auds if a["clase"] == "warn")
+        archivos_cuenta = ", ".join(af["archivo"] for af in data["archivos"])
+
+        html += f"""
+        <div style="border:1px solid #ddd;border-radius:8px;margin-bottom:20px;overflow:hidden">
+          <div style="background:{BG[clase]};padding:10px 16px;border-bottom:1px solid #ddd">
+            <span style="font-weight:bold;font-size:15px;color:{COLOR[clase]}">
+              {ICON[clase]} {cuenta}
+            </span>
+            <span style="font-size:13px;color:#555;margin-left:12px">
+              {data["paciente"] or "No identificado"}
+            </span>
+            <span style="float:right;font-size:12px;color:#777">
+              {data.get("fecha_ingreso","?")} → {data.get("fecha_egreso","?")}
+              ({data.get("dias_estancia","?")} día(s))
+            </span>
+          </div>
+          <div style="padding:8px 16px;font-size:12px;color:#555;background:#fafafa;
+                      border-bottom:1px solid #eee">
+            Archivos: {archivos_cuenta}
+          </div>
+          <table style="border-collapse:collapse;width:100%;font-size:13px">
+            <tr style="background:#f0f0ec">
+              <th style="padding:7px 12px;text-align:left;font-weight:500;color:#444">Auditoría</th>
+              <th style="padding:7px 12px;text-align:left;font-weight:500;color:#444">Categoría</th>
+              <th style="padding:7px 12px;text-align:right;font-weight:500;color:#444">Cobrado</th>
+              <th style="padding:7px 12px;text-align:right;font-weight:500;color:#444">Esperado</th>
+              <th style="padding:7px 12px;text-align:left;font-weight:500;color:#444">Resultado</th>
+            </tr>
+        """
+
+        for i, a in enumerate(auds):
+            bg_fila = "#fff" if i % 2 == 0 else "#fafafa"
+            unidad  = a.get("unidad", "")
+            cobrado_txt  = f"{a['cobrado']:.2f} {unidad}".strip() if a["cobrado"] is not None else "—"
+            esperado_txt = f"{a['esperado']:.2f} {unidad}".strip() if a.get("esperado") is not None else "—"
+            icon_r = ICON.get(a["clase"], "?")
+            color_r = COLOR.get(a["clase"], "#222")
+
+            html += f"""
+            <tr style="background:{bg_fila}">
+              <td style="padding:6px 12px">{a["label"]}</td>
+              <td style="padding:6px 12px;color:#777">{a["categoria"]}</td>
+              <td style="padding:6px 12px;text-align:right">{cobrado_txt}</td>
+              <td style="padding:6px 12px;text-align:right">{esperado_txt}</td>
+              <td style="padding:6px 12px;color:{color_r};font-weight:500">
+                {icon_r} {a["status"]}
+              </td>
+            </tr>
+            """
+            # Nota auditoria si existe y hay problema
+            if a.get("nota_auditoria") and a["clase"] in ("err", "warn", "gray"):
+                html += f"""
+                <tr style="background:{bg_fila}">
+                  <td colspan="5" style="padding:2px 12px 8px 24px;
+                      font-size:11px;color:#777;font-style:italic">
+                    {a["nota_auditoria"]}
+                  </td>
+                </tr>
+                """
+
+        html += "</table></div>"
+
+    html += """
+    <p style="font-size:11px;color:#aaa;margin-top:24px;border-top:1px solid #eee;padding-top:8px">
+      Este correo es un log automático generado por el Auditor Hospitalario.
+      No responder a este mensaje.
+    </p>
+    </body></html>
+    """
+    return html
+
+def _enviar_log_email(
+    cuentas: dict,
+    todas_auditorias: dict,
+    archivos_bytes: list,
+) -> None:
+    """
+    Envía el correo de log de forma silenciosa.
+    Si falla por cualquier razón, no afecta la app ni muestra nada al usuario.
+    Requiere en st.secrets:
+
+        [email_log]
+        smtp_host    = "smtp.gmail.com"
+        smtp_port    = 587
+        smtp_user    = "remitente@gmail.com"
+        smtp_password = "xxxx xxxx xxxx xxxx"   # App Password de Google
+        destino      = "auditor@tuempresa.com"
+    """
+    try:
+        cfg = st.secrets.get("email_log", {})
+        if not cfg:
+            return   # Sección no configurada → salir silenciosamente
+
+        smtp_host = cfg.get("smtp_host", "")
+        smtp_port = int(cfg.get("smtp_port", 587))
+        smtp_user = cfg.get("smtp_user", "")
+        smtp_pass = cfg.get("smtp_password", "")
+        destino   = cfg.get("destino", "")
+
+        if not all([smtp_host, smtp_user, smtp_pass, destino]):
+            return   # Configuración incompleta → salir silenciosamente
+
+        timestamp = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+        total     = len(cuentas)
+        con_diff  = sum(
+            1 for auds in todas_auditorias.values()
+            if any(a["clase"] in ("err","warn") for a in auds)
+        )
+
+        asunto = (
+            f"[Auditoría] {total} cuenta(s) analizadas — "
+            f"{con_diff} con diferencias — {timestamp}"
+        )
+
+        msg = MIMEMultipart("alternative")
+        msg["Subject"] = asunto
+        msg["From"]    = smtp_user
+        msg["To"]      = destino
+
+        cuerpo_html = _construir_html_log(
+            cuentas, todas_auditorias, archivos_bytes, timestamp
+        )
+        msg.attach(MIMEText(cuerpo_html, "html", "utf-8"))
+
+        with smtplib.SMTP(smtp_host, smtp_port, timeout=15) as servidor:
+            servidor.ehlo()
+            servidor.starttls()
+            servidor.login(smtp_user, smtp_pass)
+            servidor.sendmail(smtp_user, destino, msg.as_string())
+
+    except Exception:
+        pass   # Falla silenciosamente — el usuario nunca lo ve
+
+
+# =========================================================
 # SIDEBAR
 # =========================================================
 with st.sidebar:
@@ -945,6 +1155,15 @@ todas_auditorias = {
     cta: construir_auditorias(data, tolerancia_ui)
     for cta, data in cuentas.items()
 }
+
+# ── Log por email (invisible al usuario) ──────────────────
+# Se envía exactamente una vez por combinación única de archivos.
+# Streamlit re-ejecuta el script en cada interacción; session_state
+# evita que el correo se mande múltiples veces en la misma sesión.
+_hash_actual = _hash_archivos(archivos_bytes)
+if st.session_state.get("_ultimo_log_enviado") != _hash_actual:
+    _enviar_log_email(cuentas, todas_auditorias, archivos_bytes)
+    st.session_state["_ultimo_log_enviado"] = _hash_actual
 
 total_cuentas    = len(cuentas)
 cuentas_con_diff = sum(
