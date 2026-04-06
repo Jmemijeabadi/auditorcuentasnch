@@ -425,10 +425,13 @@ def barra_html(cobrado: float, esperado, clase: str) -> str:
         f'</div>'
     )
 
-def render_area(label: str, cobrado: float, esperado, tolerancia: float):
+def render_area(label: str, cobrado: float, esperado, tolerancia: float,
+                nota: str = ""):
     estado, diff, clase = evaluar(cobrado, esperado, tolerancia)
     if esperado is not None:
         subtitulo = f"Cobrado {cobrado:.2f} de {esperado:.2f} esperadas"
+    elif nota:
+        subtitulo = nota
     else:
         subtitulo = f"Cobrado {cobrado:.2f} hrs — sin documento de referencia"
 
@@ -645,9 +648,31 @@ for cuenta, data in cuentas.items():
 
         hosp = round(data["cobrado"]["hospitalizacion"], 2)
         if hosp > 0:
+            # Recopilar detalles de cada línea cobrada en hospitalización
+            items_hosp = [
+                it for it in data["evidencias_cobro"]
+                if it["area"] == "hospitalizacion"
+            ]
+            detalle_lineas = ""
+            for it in items_hosp:
+                fecha_txt = it["fecha"] if it["fecha"] else "—"
+                folio_txt = it["folio"] if it["folio"] else "—"
+                detalle_lineas += (
+                    f"<li style='margin:2px 0'>"
+                    f"{it['cantidad']:.2f} hr — {fecha_txt} — folio {folio_txt}"
+                    f"</li>"
+                )
+            detalle_html = f"<ul style='margin:6px 0 0 16px;padding:0'>{detalle_lineas}</ul>" if detalle_lineas else ""
             st.markdown(
                 f'<div class="finding-box finding-gray">'
-                f'<b>Hospitalización:</b> {hosp:.2f} hrs cobradas — sin regla de comparación.</div>',
+                f'<b>Hospitalización: {hosp:.2f} hr(s) cobradas</b> — no existe documento clínico '
+                f'de referencia entre los archivos cargados (la hoja de servicios de cirugía '
+                f'solo cubre quirófano y recuperación).<br>'
+                f'<span style="font-size:12px">Requiere verificación manual: '
+                f'confirmar con nota de enfermería u orden médica que justifique '
+                f'el uso de oxígeno en cuarto.</span>'
+                f'{detalle_html}'
+                f'</div>',
                 unsafe_allow_html=True,
             )
 
@@ -666,7 +691,10 @@ for cuenta, data in cuentas.items():
         render_area("Quirófano",   data["cobrado"]["quirofano"],    data["esperado"]["quirofano"],    tolerancia_ui)
         render_area("Recuperación",data["cobrado"]["recuperacion"], data["esperado"]["recuperacion"], tolerancia_ui)
         if hosp > 0:
-            render_area("Hospitalización", hosp, None, tolerancia_ui)
+            render_area(
+                "Hospitalización", hosp, None, tolerancia_ui,
+                nota="Verificar con nota de enfermería u orden médica",
+            )
 
         st.markdown("<br>", unsafe_allow_html=True)
 
