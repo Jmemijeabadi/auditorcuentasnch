@@ -216,21 +216,29 @@ def extraer_fechas_estancia(texto: str):
 
 def extraer_tipo_seguro(texto: str) -> str:
     """Extrae el tipo de seguro del estado de cuenta o servicios."""
-    t = normalizar(compact(texto))
-    # Desde servicios de cirugía
-    m = re.search(r"seguro:\s*(.+?)(?:cirugia programada|$)", t)
-    if m:
-        seg = m.group(1).strip()
-        if "particular" in seg:
-            return "particular"
-        return seg
-    # Desde estado de cuenta
-    m = re.search(r"cia\.?\s*cliente\s*(.+?)(?:codigo|$)", t)
-    if m:
-        seg = m.group(1).strip()
-        if "particular" in seg:
-            return "particular"
-        return seg
+    # Buscar en múltiples líneas (no compact) para mejor precisión
+    for linea in texto.splitlines():
+        n = normalizar(linea.strip())
+        # Desde servicios de cirugía: "Seguro: PARTICULAR NACIONAL"
+        m = re.match(r"seguro:\s*(.+)", n)
+        if m:
+            seg = m.group(1).strip()
+            if "particular" in seg:
+                return "particular"
+            return seg
+    # Desde estado de cuenta: buscar línea después de "Cia. Cliente"
+    lineas = texto.splitlines()
+    for i, linea in enumerate(lineas):
+        if re.search(r"Cia\.?\s*Cliente", linea, re.IGNORECASE):
+            # El valor puede estar en la misma línea o en la siguiente
+            resto = re.sub(r".*Cia\.?\s*Cliente\s*", "", linea, flags=re.IGNORECASE).strip()
+            if not resto and i + 1 < len(lineas):
+                resto = lineas[i + 1].strip()
+            if resto:
+                n = normalizar(resto)
+                if "particular" in n:
+                    return "particular"
+                return resto.strip()[:60]
     return "desconocido"
 
 def detectar_tipo_documento(texto: str) -> str:
@@ -423,8 +431,10 @@ def extraer_servicios_cirugia(texto: str) -> dict:
         resultado["sevoflurano_ml"] = a_float(m.group(1))
 
     # ── PUNTO 1/7: Ingreso y egreso de sala ───────────────
+    # PDF extrae la tabla como: "ingreso a sala:09:55 am 12:35 pm 09:58 am ..."
+    # El segundo tiempo es el egreso de sala.
     m = re.search(
-        r"ingreso a sala:\s*(\d{1,2}:\d{2}\s*[ap]m)\s+egreso de\s*sala:\s*(\d{1,2}:\d{2}\s*[ap]m)",
+        r"ingreso a sala:\s*(\d{1,2}:\d{2}\s*[ap]m)\s+(\d{1,2}:\d{2}\s*[ap]m)",
         t_norm)
     if m:
         resultado["ingreso_sala"] = m.group(1).strip()
@@ -637,9 +647,9 @@ def consolidar_por_cuenta(archivos_bytes: list) -> dict:
                 if not sc["microscopio"]:
                     sc["microscopio"] = sc_nuevo["microscopio"]
 
-            # Actualizar seguro desde servicios
+            # Actualizar seguro desde servicios (tiene prioridad sobre estado de cuenta)
             sc_actual = cuentas[cuenta]["servicios_cirugia"]
-            if cuentas[cuenta]["seguro"] is None and sc_actual.get("seguro"):
+            if sc_actual.get("seguro"):
                 cuentas[cuenta]["seguro"] = sc_actual["seguro"]
 
         elif tipo == "nota_postquirurgica":
