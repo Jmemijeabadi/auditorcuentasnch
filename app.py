@@ -462,6 +462,49 @@ def extraer_servicios_cirugia(texto: str) -> dict:
 # =========================================================
 # EXTRACCIÓN DE NOTA POST-QUIRÚRGICA
 # =========================================================
+def _parsear_tiempo_qx(texto_norm: str):
+    """
+    Parsea tiempo quirúrgico en múltiples formatos:
+      '2hrs' → 2.0  |  '6hrs y 26 min' → 6.43  |  '2:26' → 2.43
+      '2 horeas' → 2.0  |  '30 minutos' → 0.5  |  '5 hrs' → 5.0
+    Retorna horas como float o None.
+    """
+    bloque = ""
+    m = re.search(r"tiempo quirurgico:\s*(.+?)(?:incidentes|hallazgos|$)", texto_norm)
+    if m:
+        bloque = m.group(1).strip()
+    if not bloque:
+        return None
+
+    # Formato "H:MM" (ej: "2:26")
+    m = re.match(r"(\d+):(\d{2})\b", bloque)
+    if m:
+        h, mn = int(m.group(1)), int(m.group(2))
+        return round(h + mn / 60, 2)
+
+    # Formato "Xhrs y YY min" / "X hrs y YY minutos"
+    m = re.search(r"(\d+)\s*(?:hrs?|horeas?)\s*(?:y|con)?\s*(\d+)\s*min", bloque)
+    if m:
+        h, mn = int(m.group(1)), int(m.group(2))
+        return round(h + mn / 60, 2)
+
+    # Formato solo horas "Xhrs" / "X hrs" / "X horeas"
+    m = re.search(r"(\d+(?:\.\d+)?)\s*(?:hrs?|horeas?)", bloque)
+    if m:
+        return a_float(m.group(1))
+
+    # Formato solo minutos "30 minutos" / "XX min"
+    m = re.search(r"(\d+)\s*min", bloque)
+    if m:
+        return round(int(m.group(1)) / 60, 2)
+
+    # Último intento: primer número que aparezca
+    m = re.search(r"(\d+(?:\.\d+)?)", bloque)
+    if m:
+        return a_float(m.group(1))
+
+    return None
+
 def extraer_nota_postqx(texto: str) -> dict:
     t = normalizar(compact(texto))
     resultado = {
@@ -469,9 +512,7 @@ def extraer_nota_postqx(texto: str) -> dict:
         "hemotransfusion":   None,
         "histopatologico":   None,
     }
-    m = re.search(r"tiempo quirurgico:\s*(\d+(?:\.\d+)?)\s*hrs?", t)
-    if m:
-        resultado["tiempo_quirurgico"] = a_float(m.group(1))
+    resultado["tiempo_quirurgico"] = _parsear_tiempo_qx(t)
 
     m = re.search(r"hemotransfusion:\s*(no|si|sí)", t)
     if m:
@@ -497,6 +538,8 @@ def plantilla_cuenta():
         "todos_los_items":    [],
         "servicios_cirugia":  None,
         "nota_postqx":        None,
+        "num_cirugias":       0,          # Fix 7: contador de cirugías
+        "cirugias_detalle":   [],         # Fix 7: lista de {archivo, hora_total, ingreso, egreso}
     }
 
 # =========================================================
@@ -534,7 +577,16 @@ def consolidar_por_cuenta(archivos_bytes: list) -> dict:
 
         if tipo.startswith("estado_cuenta"):
             items = extraer_todos_items(texto, nombre, tipo, cuenta)
-            cuentas[cuenta]["todos_los_items"].extend(items)
+            # ── Fix 2: Deduplicar ítems entre cortes (EXTRAS vs PACIENTE) ──
+            existentes = {
+                (i["codigo"], i["cantidad"], i["fecha"], i["folio"])
+                for i in cuentas[cuenta]["todos_los_items"]
+            }
+            items_nuevos = [
+                i for i in items
+                if (i["codigo"], i["cantidad"], i["fecha"], i["folio"]) not in existentes
+            ]
+            cuentas[cuenta]["todos_los_items"].extend(items_nuevos)
             if cuentas[cuenta]["fecha_ingreso"] is None:
                 fi, fe, ds = extraer_fechas_estancia(texto)
                 if fi:
@@ -548,10 +600,20 @@ def consolidar_por_cuenta(archivos_bytes: list) -> dict:
                     cuentas[cuenta]["seguro"] = seg
 
         elif tipo == "servicios_cirugia":
+            # Fix 7: Registrar cada cirugía individual
+            sc_nuevo = extraer_servicios_cirugia(texto)
+            cuentas[cuenta]["num_cirugias"] += 1
+            cuentas[cuenta]["cirugias_detalle"].append({
+                "archivo":    nombre,
+                "hora_total": sc_nuevo.get("hora_total_qx"),
+                "ingreso":    sc_nuevo.get("ingreso_sala"),
+                "egreso":     sc_nuevo.get("egreso_sala"),
+                "cirugia_num": cuentas[cuenta]["num_cirugias"],
+            })
+
             if cuentas[cuenta]["servicios_cirugia"] is None:
-                cuentas[cuenta]["servicios_cirugia"] = extraer_servicios_cirugia(texto)
+                cuentas[cuenta]["servicios_cirugia"] = sc_nuevo
             else:
-                sc_nuevo = extraer_servicios_cirugia(texto)
                 sc = cuentas[cuenta]["servicios_cirugia"]
                 for k in ("oxigeno_qx", "oxigeno_rec", "sala_hrs_normal", "sala_hrs_adicional"):
                     sc[k] += sc_nuevo[k]
@@ -619,6 +681,37 @@ def construir_auditorias(data: dict, tolerancia: float) -> list:
     auditorias = []
 
     # ══════════════════════════════════════════════════════
+    # Fix 7: Alerta de múltiples cirugías
+    # ══════════════════════════════════════════════════════
+    num_cx = data.get("num_cirugias", 0)
+    if num_cx > 1:
+        detalles = data.get("cirugias_detalle", [])
+        detalle_txt = "; ".join(
+            f"Cx{d['cirugia_num']}: {d.get('ingreso','?')}→{d.get('egreso','?')} "
+            f"({d.get('hora_total','?')} hrs)"
+            for d in detalles
+        )
+        auditorias.append({
+            "categoria": "Validación de tiempos",
+            "key":       "multi_cirugia",
+            "label":     f"Múltiples cirugías detectadas ({num_cx})",
+            "tipo":      "informativo",
+            "unidad":    "",
+            "cobrado":   0,
+            "esperado":  None,
+            "status":    f"{num_cx} eventos quirúrgicos — los totales son acumulados, revisar individualmente",
+            "diff":      None,
+            "clase":     "warn",
+            "items_cobrados":  [],
+            "items_esperados": [],
+            "nota_auditoria": (
+                f"Se encontraron {num_cx} hojas de servicios de cirugía. "
+                f"Los datos de oxígeno, sala y equipos se acumularon. "
+                f"Detalle: {detalle_txt}"
+            ),
+        })
+
+    # ══════════════════════════════════════════════════════
     # PUNTO 1 y 7: Validación de hora total vs tiempos reales
     # ══════════════════════════════════════════════════════
     if sc:
@@ -679,25 +772,41 @@ def construir_auditorias(data: dict, tolerancia: float) -> list:
         maq_marcada = sc.get("maquina_anestesia", False)
         es_particular = "particular" in (seguro or "")
 
-        if maq_marcada:
-            if es_particular:
-                status = "documentada en servicios — paciente PARTICULAR, no debe cobrarse"
+        # Fix 6: Buscar cargo de máquina de anestesia en el estado de cuenta
+        PALABRAS_MAQUINA = {"maquina de anestesia", "maquina anestesia", "anesthesia machine"}
+        maq_items = [i for i in items
+                     if any(p in normalizar(i["descripcion"]) for p in PALABRAS_MAQUINA)]
+        maq_cobrada = len(maq_items) > 0
+
+        if maq_marcada or maq_cobrada:
+            if es_particular and maq_cobrada:
+                status = "ERROR — paciente PARTICULAR con cargo de máquina de anestesia"
+                clase  = "err"
+            elif es_particular and not maq_cobrada:
+                status = "ok — documentada en servicios, no cobrada (particular)"
+                clase  = "ok"
+            elif not es_particular and maq_cobrada:
+                status = "ok — paciente con seguro, máquina cobrada"
+                clase  = "ok"
+            elif not es_particular and maq_marcada and not maq_cobrada:
+                status = "documentada pero no cobrada — paciente con seguro, verificar"
                 clase  = "warn"
             else:
-                status = "documentada en servicios — paciente con seguro, verificar cargo"
+                status = f"documentada: {'sí' if maq_marcada else 'no'}, cobrada: {'sí' if maq_cobrada else 'no'}"
                 clase  = "gray"
+
             auditorias.append({
                 "categoria": "Validación de tiempos",
                 "key":       "maquina_anestesia",
                 "label":     "Máquina de anestesia",
                 "tipo":      "informativo",
                 "unidad":    "",
-                "cobrado":   0,
+                "cobrado":   float(maq_cobrada),
                 "esperado":  None,
                 "status":    status,
                 "diff":      None,
                 "clase":     clase,
-                "items_cobrados":  [],
+                "items_cobrados":  maq_items,
                 "items_esperados": [],
                 "nota_auditoria": (
                     f"Seguro: {seguro or 'no identificado'}. "
@@ -827,6 +936,47 @@ def construir_auditorias(data: dict, tolerancia: float) -> list:
             ) if sala_esp else None,
         })
 
+    # ── Fix 5: Validar desglose normal vs adicional ───────
+    if sala_items and sala_esp and sala_esp >= 1:
+        items_normal   = [i for i in sala_items if i["codigo"] == CODIGO_SALA_NORMAL]
+        items_adicional = [i for i in sala_items if i["codigo"] == CODIGO_SALA_ADICIONAL]
+        cant_normal    = round(sum(i["cantidad"] for i in items_normal), 3)
+        cant_adicional = round(sum(i["cantidad"] for i in items_adicional), 3)
+        esp_normal     = 1.0
+        esp_adicional  = max(sala_esp - 1, 0)
+
+        problemas = []
+        if abs(cant_normal - esp_normal) > tolerancia:
+            problemas.append(f"primera hora: cobrado {cant_normal:.0f}, esperado {esp_normal:.0f}")
+        if abs(cant_adicional - esp_adicional) > tolerancia:
+            problemas.append(f"adicionales: cobrado {cant_adicional:.0f}, esperado {esp_adicional:.0f}")
+
+        if problemas:
+            status_d = "desglose incorrecto — " + "; ".join(problemas)
+            clase_d  = "err"
+        else:
+            status_d = f"ok — 1 hr normal + {esp_adicional:.0f} hr(s) adicional"
+            clase_d  = "ok"
+
+        auditorias.append({
+            "categoria": "Sala quirúrgica",
+            "key":       "sala_desglose",
+            "label":     "Desglose sala (normal vs adicional)",
+            "tipo":      "informativo",
+            "unidad":    "",
+            "cobrado":   0,
+            "esperado":  None,
+            "status":    status_d,
+            "diff":      None,
+            "clase":     clase_d,
+            "items_cobrados":  sala_items,
+            "items_esperados": [],
+            "nota_auditoria": (
+                f"Debe haber exactamente 1 cargo de primera hora (QRF-0000002) y "
+                f"{esp_adicional:.0f} cargo(s) de hora adicional (QRF-0000001)."
+            ),
+        })
+
     # ── Sevoflurano ───────────────────────────────────────
     sevo_items = [i for i in items if i["codigo"] == CODIGO_SEVOFLURANO]
     sevo_cobrado = round(sum(i["cantidad"] for i in sevo_items), 2)
@@ -834,6 +984,13 @@ def construir_auditorias(data: dict, tolerancia: float) -> list:
 
     if sevo_items or sevo_esp:
         status, diff, clase = evaluar(sevo_cobrado, sevo_esp, tolerancia=1.0)
+        # Fix 4: Desglose por folio
+        desglose = " + ".join(
+            f"{i['cantidad']:.0f} ml ({i['folio']})" for i in sevo_items
+        ) if len(sevo_items) > 1 else ""
+        nota_sevo = "Tolerancia de ±1.0 ml por redondeo."
+        if desglose:
+            nota_sevo += f" Desglose: {desglose} = {sevo_cobrado:.0f} ml total."
         auditorias.append({
             "categoria": "Sala quirúrgica",
             "key":       "sevoflurano",
@@ -847,7 +1004,7 @@ def construir_auditorias(data: dict, tolerancia: float) -> list:
             "clase":     clase,
             "items_cobrados":  sevo_items,
             "items_esperados": [],
-            "nota_auditoria": "Tolerancia de ±1.0 ml por redondeo.",
+            "nota_auditoria": nota_sevo,
         })
 
     # ══════════════════════════════════════════════════════
@@ -1259,6 +1416,91 @@ def construir_auditorias(data: dict, tolerancia: float) -> list:
     return auditorias
 
 # =========================================================
+# FIX 3: REPORTE HTML DESCARGABLE POR CUENTA
+# =========================================================
+def _construir_html_reporte_cuenta(
+    cuenta: str, data: dict, auds: list, file_hash: str,
+) -> str:
+    """Genera un HTML imprimible para una sola cuenta."""
+    ICON  = {"ok": "✅", "err": "❌", "warn": "⚠️", "gray": "ℹ️"}
+    COLOR = {"ok": "#27500A", "err": "#791F1F", "warn": "#633806", "gray": "#444441"}
+    BG    = {"ok": "#EAF3DE", "err": "#FCEBEB", "warn": "#FAEEDA", "gray": "#F1EFE8"}
+
+    estado_txt, clase = estado_global(auds)
+    timestamp = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+    archivos_cuenta = ", ".join(af["archivo"] for af in data["archivos"])
+
+    html = f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<title>Auditoría {cuenta}</title>
+<style>
+  body{{font-family:Arial,sans-serif;max-width:900px;margin:20px auto;color:#222;font-size:13px}}
+  h1{{color:#185FA5;font-size:20px;border-bottom:2px solid #185FA5;padding-bottom:6px}}
+  .meta{{color:#777;font-size:11px;margin-bottom:16px}}
+  .finding{{border-left:3px solid;padding:6px 12px;margin:6px 0;border-radius:0 6px 6px 0}}
+  .finding-err{{border-color:#E24B4A;background:#FCEBEB;color:#791F1F}}
+  .finding-warn{{border-color:#EF9F27;background:#FAEEDA;color:#633806}}
+  table{{border-collapse:collapse;width:100%;margin:10px 0}}
+  th{{background:#f0f0ec;padding:6px 10px;text-align:left;font-weight:500;font-size:12px;
+      border-bottom:1px solid #ddd}}
+  td{{padding:6px 10px;border-bottom:1px solid #eee;font-size:12px}}
+  .cat{{font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.07em;
+       color:#555;margin:18px 0 6px;padding-bottom:4px;border-bottom:1px solid #ddd}}
+  @media print{{ body{{margin:0}} }}
+</style></head><body>
+
+<h1>🏥 Auditoría — {cuenta}</h1>
+<p><b>Paciente:</b> {data["paciente"] or "No identificado"}<br>
+<b>Seguro:</b> {data.get("seguro","N/A")}<br>
+<b>Ingreso:</b> {data.get("fecha_ingreso","?")} → <b>Egreso:</b> {data.get("fecha_egreso","?")}
+  ({data.get("dias_estancia","?")} día(s))<br>
+<b>Estado:</b> <span style="color:{COLOR[clase]}">{ICON[clase]} {estado_txt}</span></p>
+<p class="meta">Generado: {timestamp} · Hash archivos: {file_hash[:12]}…<br>
+Archivos: {archivos_cuenta}</p>
+"""
+    # Hallazgos
+    errores = [a for a in auds if a["clase"] in ("err", "warn")]
+    if errores:
+        html += "<h2>Hallazgos</h2>"
+        for a in errores:
+            cls = "finding-err" if a["clase"] == "err" else "finding-warn"
+            html += (f'<div class="finding {cls}"><b>{a["label"]}:</b> {a["status"]}.'
+                     + (f' {a["nota_auditoria"]}' if a.get("nota_auditoria") else "")
+                     + '</div>')
+
+    # Tabla de auditorías
+    categorias = []
+    for a in auds:
+        if a["categoria"] not in categorias:
+            categorias.append(a["categoria"])
+
+    for cat in categorias:
+        html += f'<div class="cat">{cat}</div>'
+        html += '<table><tr><th>Auditoría</th><th style="text-align:right">Cobrado</th>'
+        html += '<th style="text-align:right">Esperado</th><th>Resultado</th></tr>'
+        for a in [x for x in auds if x["categoria"] == cat]:
+            u = a.get("unidad", "")
+            cob = f"{a['cobrado']:.2f} {u}".strip() if a["cobrado"] is not None else "—"
+            esp = f"{a['esperado']:.2f} {u}".strip() if a.get("esperado") is not None else "—"
+            icon = ICON.get(a["clase"], "")
+            color = COLOR.get(a["clase"], "#222")
+            html += (f'<tr><td>{a["label"]}</td>'
+                     f'<td style="text-align:right">{cob}</td>'
+                     f'<td style="text-align:right">{esp}</td>'
+                     f'<td style="color:{color}">{icon} {a["status"]}</td></tr>')
+            if a.get("nota_auditoria") and a["clase"] in ("err","warn","gray"):
+                html += (f'<tr><td colspan="4" style="padding:2px 10px 6px 24px;'
+                         f'font-size:11px;color:#777;font-style:italic">'
+                         f'{a["nota_auditoria"]}</td></tr>')
+        html += '</table>'
+
+    html += """
+<p style="font-size:10px;color:#aaa;margin-top:30px;border-top:1px solid #eee;padding-top:6px">
+  Reporte generado automáticamente por Auditor Hospitalario.
+</p></body></html>"""
+    return html
+
+# =========================================================
 # ESTADO GLOBAL DE CUENTA
 # =========================================================
 def estado_global(auditorias: list):
@@ -1657,6 +1899,14 @@ c2.metric("Con diferencias",  cuentas_con_diff)
 c3.metric("Errores críticos", total_reglas_err)
 c4.metric("Advertencias",     total_reglas_warn)
 
+# ── Fix 8: Timestamp y trazabilidad ───────────────────────
+_ts_auditoria = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+st.caption(
+    f"Auditoría generada: {_ts_auditoria} · "
+    f"Hash de archivos: `{_hash_actual[:12]}…` · "
+    f"{len(archivos_bytes)} archivo(s) procesados"
+)
+
 st.divider()
 
 # =========================================================
@@ -1719,6 +1969,18 @@ def mostrar_detalle(cuenta_key: str):
               af["tipo_documento"].replace("estado_cuenta_", "Estado de cuenta — corte "))
         st.markdown(f"- `{af['archivo']}` → {tipo_label}")
 
+    # ── Fix 3: Botón de descarga de reporte ───────────────
+    st.divider()
+    html_reporte = _construir_html_reporte_cuenta(
+        cuenta_key, data, auds, _hash_actual)
+    st.download_button(
+        "📥 Descargar reporte de esta cuenta (HTML)",
+        data=html_reporte.encode("utf-8"),
+        file_name=f"auditoria_{cuenta_key}.html",
+        mime="text/html",
+        key=f"dl_reporte_{cuenta_key}",
+    )
+
 
 # =========================================================
 # LISTA DE CUENTAS
@@ -1777,6 +2039,8 @@ for cuenta, auds in todas_auditorias.items():
         "Cuenta": cuenta,
         "Paciente": cuentas[cuenta]["paciente"],
         "Seguro": cuentas[cuenta].get("seguro", ""),
+        "Fecha_auditoria": _ts_auditoria,
+        "Hash_archivos": _hash_actual[:12],
     }
     for a in auds:
         fila[a["label"]] = a["status"]
