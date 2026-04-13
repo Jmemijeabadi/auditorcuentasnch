@@ -1660,6 +1660,67 @@ c4.metric("Advertencias",     total_reglas_warn)
 st.divider()
 
 # =========================================================
+# DIALOG POPUP PARA DETALLE DE CUENTA
+# =========================================================
+@st.dialog("Detalle de cuenta", width="large")
+def mostrar_detalle(cuenta_key: str):
+    """Muestra el detalle completo de una cuenta en un popup modal."""
+    data = cuentas[cuenta_key]
+    auds = todas_auditorias[cuenta_key]
+    estado_txt, clase = estado_global(auds)
+
+    # ── Encabezado del popup ──────────────────────────────
+    seguro_label = data.get("seguro", "")
+    st.markdown(
+        f'**{cuenta_key}** — {data["paciente"] or "No identificado"}'
+        + (f' · {seguro_label}' if seguro_label else "")
+    )
+    if data.get("fecha_ingreso"):
+        st.caption(
+            f"Ingreso {data['fecha_ingreso']} → Egreso {data['fecha_egreso']} "
+            f"({data['dias_estancia']} día(s))"
+        )
+
+    # ── Hallazgos destacados ──────────────────────────────
+    errores  = [a for a in auds if a["clase"] == "err"]
+    avisos   = [a for a in auds if a["clase"] == "warn"]
+    if errores or avisos:
+        st.markdown("#### Hallazgos que requieren atención")
+        for a in errores + avisos:
+            cls = "finding-err" if a["clase"] == "err" else "finding-warn"
+            st.markdown(
+                f'<div class="finding-box {cls}">'
+                f'<b>{a["label"]}:</b> {a["status"]}.'
+                + (f' {a["nota_auditoria"]}' if a["nota_auditoria"] else "")
+                + '</div>',
+                unsafe_allow_html=True,
+            )
+
+    # ── Auditorías por categoría ──────────────────────────
+    categorias = []
+    for a in auds:
+        if a["categoria"] not in categorias:
+            categorias.append(a["categoria"])
+
+    for cat in categorias:
+        items_cat = [a for a in auds if a["categoria"] == cat]
+        st.markdown(f'<div class="cat-title">{cat}</div>', unsafe_allow_html=True)
+        for audit in items_cat:
+            render_auditoria(audit)
+
+    # ── Archivos procesados ───────────────────────────────
+    st.markdown('<div class="cat-title">Archivos procesados</div>', unsafe_allow_html=True)
+    for af in data["archivos"]:
+        tipo_label = {
+            "servicios_cirugia": "Servicios de cirugía",
+            "nota_postquirurgica": "Nota post-quirúrgica",
+            "otro": "Tipo no reconocido",
+        }.get(af["tipo_documento"],
+              af["tipo_documento"].replace("estado_cuenta_", "Estado de cuenta — corte "))
+        st.markdown(f"- `{af['archivo']}` → {tipo_label}")
+
+
+# =========================================================
 # LISTA DE CUENTAS
 # =========================================================
 st.subheader("Cuentas analizadas")
@@ -1682,60 +1743,26 @@ for cuenta, data in cuentas.items():
     seguro_label = data.get("seguro", "")
     seguro_html = f' · <span style="font-size:11px">{seguro_label}</span>' if seguro_label else ""
 
-    st.markdown(
-        f'<div class="cuenta-card">'
-        f'{dot_html(clase)}'
-        f'<div style="flex:1">'
-        f'<span style="font-weight:500;font-size:14px">{cuenta}</span>'
-        f'<span style="color:var(--color-text-secondary);font-size:13px;margin-left:10px">'
-        f'{data["paciente"] or "No identificado"}{seguro_html}</span>'
-        f'</div>'
-        f'<span style="font-size:11px;color:var(--color-text-tertiary);margin-right:12px">'
-        f'{len(data["archivos"])} archivo(s)</span>'
-        f'{resumen_badge}'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-
-    with st.expander(f"Ver detalle → {cuenta}"):
-
-        # ── Hallazgos destacados ──────────────────────────
-        errores  = [a for a in auds if a["clase"] == "err"]
-        avisos   = [a for a in auds if a["clase"] == "warn"]
-        if errores or avisos:
-            st.markdown("#### Hallazgos que requieren atención")
-            for a in errores + avisos:
-                cls = "finding-err" if a["clase"] == "err" else "finding-warn"
-                st.markdown(
-                    f'<div class="finding-box {cls}">'
-                    f'<b>{a["label"]}:</b> {a["status"]}.'
-                    + (f' {a["nota_auditoria"]}' if a["nota_auditoria"] else "")
-                    + '</div>',
-                    unsafe_allow_html=True,
-                )
-
-        # ── Auditorías por categoría ──────────────────────
-        categorias = []
-        for a in auds:
-            if a["categoria"] not in categorias:
-                categorias.append(a["categoria"])
-
-        for cat in categorias:
-            items_cat = [a for a in auds if a["categoria"] == cat]
-            st.markdown(f'<div class="cat-title">{cat}</div>', unsafe_allow_html=True)
-            for audit in items_cat:
-                render_auditoria(audit)
-
-        # ── Archivos procesados ───────────────────────────
-        with st.expander("📄 Archivos procesados"):
-            for af in data["archivos"]:
-                tipo_label = {
-                    "servicios_cirugia": "Servicios de cirugía",
-                    "nota_postquirurgica": "Nota post-quirúrgica",
-                    "otro": "Tipo no reconocido",
-                }.get(af["tipo_documento"],
-                      af["tipo_documento"].replace("estado_cuenta_", "Estado de cuenta — corte "))
-                st.markdown(f"- `{af['archivo']}` → {tipo_label}")
+    # ── Tarjeta + botón de detalle en la misma fila ───────
+    col_card, col_btn = st.columns([6, 1])
+    with col_card:
+        st.markdown(
+            f'<div class="cuenta-card">'
+            f'{dot_html(clase)}'
+            f'<div style="flex:1">'
+            f'<span style="font-weight:500;font-size:14px">{cuenta}</span>'
+            f'<span style="color:var(--color-text-secondary);font-size:13px;margin-left:10px">'
+            f'{data["paciente"] or "No identificado"}{seguro_html}</span>'
+            f'</div>'
+            f'<span style="font-size:11px;color:var(--color-text-tertiary);margin-right:12px">'
+            f'{len(data["archivos"])} archivo(s)</span>'
+            f'{resumen_badge}'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+    with col_btn:
+        if st.button("Ver detalle", key=f"btn_detalle_{cuenta}", use_container_width=True):
+            mostrar_detalle(cuenta)
 
 st.divider()
 
