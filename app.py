@@ -1242,8 +1242,9 @@ def construir_auditorias(data: dict, tolerancia: float) -> list:
             clase  = "warn"
         else:
             # Marcado pero ni microscopio ni funda cobrados
-            status = "microscopio marcado en hoja de servicios pero no cobrado"
-            clase  = "gray"
+            status = ("microscopio marcado en hoja de servicios pero no cobrado — "
+                      "verificar con el área")
+            clase  = "warn"
 
         auditorias.append({
             "categoria": "Accesorios complementarios",
@@ -1295,8 +1296,9 @@ def construir_auditorias(data: dict, tolerancia: float) -> list:
             clase  = "warn"
         else:
             # Marcado pero ni arco ni funda cobrados
-            status = "arco en C marcado en hoja de servicios pero no cobrado"
-            clase  = "gray"
+            status = ("arco en C marcado en hoja de servicios pero no cobrado — "
+                      "verificar con el área")
+            clase  = "warn"
 
         auditorias.append({
             "categoria": "Accesorios complementarios",
