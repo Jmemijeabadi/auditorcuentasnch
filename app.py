@@ -855,41 +855,6 @@ def construir_auditorias(data: dict, tolerancia: float) -> list:
             })
 
     # ══════════════════════════════════════════════════════
-    # PUNTO 4: Horas de sala deben coincidir con oxígeno QX
-    # ══════════════════════════════════════════════════════
-    if sc:
-        sala_total_doc = sc.get("sala_hrs_normal", 0) + sc.get("sala_hrs_adicional", 0)
-        ox_qx_doc      = sc.get("oxigeno_qx", 0)
-
-        if sala_total_doc > 0 or ox_qx_doc > 0:
-            if abs(sala_total_doc - ox_qx_doc) < 0.01:
-                status = f"ok — sala {sala_total_doc:.0f} hrs = oxígeno QX {ox_qx_doc:.0f} hrs"
-                clase  = "ok"
-            else:
-                status = (f"sala {sala_total_doc:.0f} hrs ≠ oxígeno QX {ox_qx_doc:.0f} hrs "
-                          f"en hoja de servicios")
-                clase  = "warn"
-            auditorias.append({
-                "categoria": "Consistencia de servicios",
-                "key":       "sala_vs_oxigeno",
-                "label":     "Horas de sala vs oxígeno QX (en hoja de servicios)",
-                "tipo":      "informativo",
-                "unidad":    "hrs",
-                "cobrado":   sala_total_doc,
-                "esperado":  ox_qx_doc,
-                "status":    status,
-                "diff":      round(sala_total_doc - ox_qx_doc, 1),
-                "clase":     clase,
-                "items_cobrados":  [],
-                "items_esperados": [],
-                "nota_auditoria": (
-                    f"Servicios documenta: sala {sc.get('sala_hrs_normal',0):.0f} + "
-                    f"{sc.get('sala_hrs_adicional',0):.0f} adicional = {sala_total_doc:.0f} hrs. "
-                    f"Oxígeno QX documentado: {ox_qx_doc:.0f} hrs. Deben coincidir."
-                ),
-            })
-
-    # ══════════════════════════════════════════════════════
     # CAMBIO 1 — OXÍGENO QX: el esperado se calcula desde las horas de sala
     # (HORA TOTAL DE QUIRÓFANO = sala normal + sala adicional), NO del campo
     # "Oxígeno x hr" de la hoja de servicios. Indicación del auditor:
@@ -945,6 +910,45 @@ def construir_auditorias(data: dict, tolerancia: float) -> list:
                                 if e["area"] == "quirofano"],
             "nota_auditoria": " ".join(nota_partes) if nota_partes else None,
         })
+
+        # ── Aviso a enfermería: casilla azul de oxígeno mal llenada ──
+        # No afecta el cobro (el cobro se valida arriba contra sala). Solo
+        # documenta cuando enfermería llenó mal la casilla "Oxígeno x hr"
+        # de la hoja, para que el auditor tenga evidencia al hablar con
+        # el área. Aparece junto a la auditoría real de oxígeno quirófano.
+        sala_total_doc = sc.get("sala_hrs_normal", 0) + sc.get("sala_hrs_adicional", 0)
+        ox_qx_doc      = sc.get("oxigeno_qx", 0)
+        if sala_total_doc > 0 or ox_qx_doc > 0:
+            casilla_ok = abs(sala_total_doc - ox_qx_doc) < 0.01
+            if casilla_ok:
+                status_av = (f"ok — casilla azul correctamente llenada "
+                             f"({ox_qx_doc:.0f} hrs = sala {sala_total_doc:.0f} hrs)")
+                clase_av  = "ok"
+            else:
+                status_av = (f"casilla azul marca {ox_qx_doc:.0f} hrs cuando "
+                             f"la sala fue de {sala_total_doc:.0f} hrs — "
+                             f"verificar con enfermería")
+                clase_av  = "warn"
+            auditorias.append({
+                "categoria": "Oxígeno",
+                "key":       "aviso_casilla_azul",
+                "label":     "Aviso a enfermería: casilla azul de oxígeno",
+                "tipo":      "informativo",
+                "unidad":    "hrs",
+                "cobrado":   ox_qx_doc,
+                "esperado":  sala_total_doc,
+                "status":    status_av,
+                "diff":      round(ox_qx_doc - sala_total_doc, 1),
+                "clase":     clase_av,
+                "items_cobrados":  [],
+                "items_esperados": [],
+                "nota_auditoria": (
+                    "Este dato NO se usa para validar el cobro. Es un aviso de "
+                    "proceso: la casilla azul 'Oxígeno x hr' de la hoja de "
+                    "servicios debe coincidir con las horas de sala. Si no "
+                    "coincide, enfermería llenó mal la hoja."
+                ),
+            })
 
     # ── Oxígeno recuperación: se conserva la lógica original ──
     # (compara contra el campo "Oxígeno recuperación" de la hoja de servicios)
