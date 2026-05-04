@@ -114,27 +114,27 @@ CODIGOS_HABITACION = {"HOS-0000001", "HOS-0000003"}
 # Servicios binarios: (key, label, patron_en_servicios, codigos_en_cuenta, area_cuenta)
 SERVICIOS_BINARIOS_DEF = [
     ("electrocauterio", "Electrocauterio",
-     r"x\s+electrocauterio",
+     r"\bx\s+electrocauterio",
      {"IBM-0000032"}, "quirofano"),
     ("aspirador", "Torre de aspiración",
-     r"x\s+torre de aspiracion",
+     r"\bx\s+torre de aspiracion",
      {"IBM-0000008"}, "quirofano"),
     ("monitor_qx", "Monitor QX",
-     r"x\s+monitor sv\s*qx",
+     r"\bx\s+monitor sv\s*qx",
      {"IBM-0000035"}, "quirofano"),
     ("sala_rec", "Sala de recuperación",
-     r"x\s+sala de recuperacion\b",
+     r"\bx\s+sala de recuperacion\b",
      {"REC-0000001"}, "recuperacion"),
     ("monitor_rec", "Monitor SV recuperación",
-     r"x\s+monitor sv recuperacion",
+     r"\bx\s+monitor sv recuperacion",
      {"IBM-0000010"}, "recuperacion"),
     # ── PUNTO 10: Microscopio ─────────────────────────────
     ("microscopio", "Microscopio-TIVATO",
-     r"x\s+microscopio",
+     r"\bx\s+microscopio",
      {"IBM-0000034"}, "quirofano"),
     # ── PUNTO 11: Arco en C ──────────────────────────────
     ("arco_c", "Arco en C",
-     r"x\s+arco en c",
+     r"\bx\s+arco en c",
      {"IBM-0000023"}, "quirofano"),
 ]
 
@@ -400,11 +400,11 @@ def extraer_servicios_cirugia(texto: str) -> dict:
         resultado["hora_total_qx"] = a_float(m.group(1))
 
     # ── Sala de cirugía — primera hora y adicionales ──────
-    m = re.search(r"x\s+sala de cirugia x hr\s+(\d+(?:\.\d+)?)\s*hrs?", t_norm)
+    m = re.search(r"\bx\s+sala de cirugia x hr\s+(\d+(?:\.\d+)?)\s*hrs?", t_norm)
     if m:
         resultado["sala_hrs_normal"] = a_float(m.group(1))
 
-    m = re.search(r"x\s+sala de cirugia adicional\s+(\d+(?:\.\d+)?)\s*hrs?", t_norm)
+    m = re.search(r"\bx\s+sala de cirugia adicional\s+(\d+(?:\.\d+)?)\s*hrs?", t_norm)
     if m:
         resultado["sala_hrs_adicional"] = a_float(m.group(1))
 
@@ -426,7 +426,7 @@ def extraer_servicios_cirugia(texto: str) -> dict:
                 {"area": "recuperacion", "cantidad_esperada": hrs, "linea_original": orig})
 
     # ── Sevoflurano ───────────────────────────────────────
-    m = re.search(r"x\s+sevoflorane?\s+([\d,.]+)\s*ml", t_norm)
+    m = re.search(r"\bx\s+sevoflorane?\s+([\d,.]+)\s*ml", t_norm)
     if m:
         resultado["sevoflurano_ml"] = a_float(m.group(1))
 
@@ -452,14 +452,14 @@ def extraer_servicios_cirugia(texto: str) -> dict:
 
     # ── PUNTO 2: Máquina de anestesia marcada ─────────────
     resultado["maquina_anestesia"] = bool(
-        re.search(r"x\s+maquina de anestesia", t_norm))
+        re.search(r"\bx\s+maquina de anestesia", t_norm))
 
     # ── PUNTO 10: Microscopio marcado ─────────────────────
     resultado["microscopio"] = bool(
-        re.search(r"x\s+microscopio", t_norm))
+        re.search(r"\bx\s+microscopio", t_norm))
 
     # ── PUNTO 11: Arco en C horas ─────────────────────────
-    m = re.search(r"x\s+arco en c\s+(\d+(?:\.\d+)?)\s*hrs?", t_norm)
+    m = re.search(r"\bx\s+arco en c\s+(\d+(?:\.\d+)?)\s*hrs?", t_norm)
     if m:
         resultado["arco_c_hrs"] = a_float(m.group(1))
 
