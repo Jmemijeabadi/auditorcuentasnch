@@ -108,8 +108,8 @@ PALABRAS_PATOLOGIA = {
     "patologia","histopatolog","biopsia","estudio histol",
 }
 
-# Habitación
-CODIGO_HABITACION = "HOS-0000001"
+# Habitación — incluye STANDARD y AMBULATORIA
+CODIGOS_HABITACION = {"HOS-0000001", "HOS-0000003"}
 
 # Servicios binarios: (key, label, patron_en_servicios, codigos_en_cuenta, area_cuenta)
 SERVICIOS_BINARIOS_DEF = [
@@ -1516,7 +1516,7 @@ def construir_auditorias(data: dict, tolerancia: float) -> list:
     })
 
     # Días de habitación
-    hab_items = por_codigo({CODIGO_HABITACION})
+    hab_items = por_codigo(CODIGOS_HABITACION)
     hab_cobrado = len(hab_items)
     if hab_items or dias:
         status, diff, clase = evaluar(float(hab_cobrado), float(dias) if dias else None, 0)
