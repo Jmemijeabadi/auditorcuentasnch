@@ -676,6 +676,30 @@ def evaluar(cobrado, esperado, tolerancia: float = 0.01):
         return f"faltan {abs(diff):.2f}", diff, "err"
     return f"sobran {abs(diff):.2f}", diff, "warn"
 
+def _precio_neto_promedio(items: list):
+    """Precio neto promedio (post-descuento) por unidad. None si no calculable."""
+    if not items:
+        return None
+    total_cant = sum(i.get("cantidad", 0) for i in items)
+    total_sub  = sum(i.get("subtotal", 0) for i in items)
+    if total_cant <= 0:
+        return None
+    return total_sub / total_cant
+
+def _calcular_monto_diff(diff, items_cobrados):
+    """
+    Estima el monto en pesos de una diferencia numérica.
+    - Si diff > 0 (sobran): monto exacto de lo cobrado de más.
+    - Si diff < 0 (faltan): monto estimado a partir del precio de los items cobrados.
+    - Si no hay items cobrados: None (sin precio de referencia).
+    """
+    if diff is None or abs(diff) < 0.001:
+        return None
+    precio = _precio_neto_promedio(items_cobrados)
+    if precio is None:
+        return None
+    return abs(diff) * precio
+
 def construir_auditorias(data: dict, tolerancia: float) -> list:
     items     = data["todos_los_items"]
     sc        = data["servicios_cirugia"] or {}
@@ -1594,6 +1618,24 @@ def construir_auditorias(data: dict, tolerancia: float) -> list:
             ),
         })
 
+    # ══════════════════════════════════════════════════════
+    # Post-proceso: calcular monto económico de cada hallazgo
+    # cuando sea posible. Solo aplica a auditorías numéricas
+    # con diff distinto de cero y donde haya items cobrados
+    # como referencia de precio.
+    # ══════════════════════════════════════════════════════
+    for a in auditorias:
+        a["monto_diff"] = None
+        if a.get("tipo") != "numerico":
+            continue
+        if a.get("clase") not in ("err", "warn"):
+            continue
+        diff = a.get("diff")
+        if diff is None:
+            continue
+        items_ref = a.get("items_cobrados") or []
+        a["monto_diff"] = _calcular_monto_diff(diff, items_ref)
+
     return auditorias
 
 # =========================================================
@@ -1774,6 +1816,13 @@ def render_auditoria(audit: dict):
             sub = f"Cobrado {cobrado:.2f} {unidad}  ·  Esperado {esperado:.2f} {unidad}"
         else:
             sub = f"Cobrado {cobrado:.2f} {unidad}"
+        # Monto económico de la diferencia (cuando aplica)
+        monto = audit.get("monto_diff")
+        if monto is not None and monto >= 1:
+            diff = audit.get("diff", 0)
+            etiqueta = "sobrecobro" if diff > 0 else "faltante"
+            sub += (f'  ·  <b style="color:{("#791F1F" if diff < 0 else "#633806")}">'
+                    f'≈ ${monto:,.0f} {etiqueta}</b>')
         if audit.get("nota_auditoria"):
             sub += f"<br>{audit['nota_auditoria']}"
         st.markdown(f'<div class="audit-sub">{sub}</div>', unsafe_allow_html=True)
@@ -2073,12 +2122,20 @@ total_reglas_warn = sum(
     sum(1 for a in auds if a["clase"] == "warn")
     for auds in todas_auditorias.values()
 )
+# Suma global de hallazgos económicos (sobrecobros + faltantes estimados)
+monto_global = sum(
+    a.get("monto_diff") or 0
+    for auds in todas_auditorias.values()
+    for a in auds
+    if a.get("clase") in ("err", "warn") and a.get("monto_diff")
+)
 
-c1, c2, c3, c4 = st.columns(4)
+c1, c2, c3, c4, c5 = st.columns(5)
 c1.metric("Cuentas",          total_cuentas)
 c2.metric("Con diferencias",  cuentas_con_diff)
 c3.metric("Errores críticos", total_reglas_err)
 c4.metric("Advertencias",     total_reglas_warn)
+c5.metric("Monto en hallazgos", f"≈ ${monto_global:,.0f}")
 
 # ── Fix 8: Timestamp y trazabilidad ───────────────────────
 _ts_auditoria = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
@@ -2119,23 +2176,55 @@ def mostrar_detalle(cuenta_key: str):
         st.markdown("#### Hallazgos que requieren atención")
         for a in errores + avisos:
             cls = "finding-err" if a["clase"] == "err" else "finding-warn"
+            monto = a.get("monto_diff")
+            monto_txt = ""
+            if monto is not None and monto >= 1:
+                etiqueta = "sobrecobro" if (a.get("diff") or 0) > 0 else "faltante"
+                monto_txt = f' <b>(≈ ${monto:,.0f} {etiqueta})</b>'
             st.markdown(
                 f'<div class="finding-box {cls}">'
-                f'<b>{a["label"]}:</b> {a["status"]}.'
+                f'<b>{a["label"]}:</b> {a["status"]}.{monto_txt}'
                 + (f' {a["nota_auditoria"]}' if a["nota_auditoria"] else "")
                 + '</div>',
                 unsafe_allow_html=True,
             )
 
-    # ── Auditorías por categoría ──────────────────────────
+    # ── Toggle: mostrar también auditorías OK ─────────────
+    n_ok = sum(1 for a in auds if a["clase"] == "ok")
+    mostrar_ok = False
+    if n_ok > 0:
+        mostrar_ok = st.checkbox(
+            f"Mostrar también las {n_ok} validaciones que pasaron correctamente",
+            value=False,
+            key=f"chk_mostrar_ok_{cuenta_key}",
+        )
+
+    # ── Auditorías por categoría (filtradas) ──────────────
     categorias = []
     for a in auds:
         if a["categoria"] not in categorias:
             categorias.append(a["categoria"])
 
     for cat in categorias:
-        items_cat = [a for a in auds if a["categoria"] == cat]
-        st.markdown(f'<div class="cat-title">{cat}</div>', unsafe_allow_html=True)
+        items_cat_all = [a for a in auds if a["categoria"] == cat]
+        if mostrar_ok:
+            items_cat = items_cat_all
+        else:
+            items_cat = [a for a in items_cat_all if a["clase"] != "ok"]
+
+        # Si la categoría no tiene nada que mostrar, saltarla
+        if not items_cat:
+            continue
+
+        # Header de categoría con nota de OK ocultas
+        n_ok_cat = sum(1 for a in items_cat_all if a["clase"] == "ok")
+        sufijo = ""
+        if not mostrar_ok and n_ok_cat > 0:
+            sufijo = (f' <span style="color:var(--color-text-tertiary);'
+                      f'font-weight:400;text-transform:none;letter-spacing:0">'
+                      f'· {n_ok_cat} OK ocultas</span>')
+        st.markdown(f'<div class="cat-title">{cat}{sufijo}</div>',
+                    unsafe_allow_html=True)
         for audit in items_cat:
             render_auditoria(audit)
 
@@ -2168,7 +2257,18 @@ def mostrar_detalle(cuenta_key: str):
 # =========================================================
 st.subheader("Cuentas analizadas")
 
-for cuenta, data in cuentas.items():
+# Ordenar por urgencia: más errores arriba, luego más warnings,
+# luego limpias al final. Empate: orden alfabético de cuenta.
+def _orden_urgencia(item):
+    cta, _ = item
+    auds = todas_auditorias[cta]
+    n_err  = sum(1 for a in auds if a["clase"] == "err")
+    n_warn = sum(1 for a in auds if a["clase"] == "warn")
+    return (-n_err, -n_warn, cta)
+
+cuentas_ordenadas = sorted(cuentas.items(), key=_orden_urgencia)
+
+for cuenta, data in cuentas_ordenadas:
     auds        = todas_auditorias[cuenta]
     estado_txt, clase = estado_global(auds)
     n_err  = sum(1 for a in auds if a["clase"] == "err")
@@ -2181,6 +2281,17 @@ for cuenta, data in cuentas.items():
         resumen_badge += f'<span class="badge badge-warn" style="margin-right:4px">{n_warn} aviso(s)</span>'
     if not n_err and not n_warn:
         resumen_badge = badge_html("Sin diferencias", "ok")
+
+    # Sumar monto económico de los hallazgos
+    monto_total = sum(
+        a.get("monto_diff") or 0
+        for a in auds
+        if a.get("clase") in ("err", "warn") and a.get("monto_diff")
+    )
+    monto_html = ""
+    if monto_total >= 1:
+        monto_html = (f'<span style="font-size:11px;color:#791F1F;font-weight:500;'
+                      f'margin-right:10px">≈ ${monto_total:,.0f}</span>')
 
     # Mostrar seguro en la tarjeta
     seguro_label = data.get("seguro", "")
@@ -2199,6 +2310,7 @@ for cuenta, data in cuentas.items():
             f'</div>'
             f'<span style="font-size:11px;color:var(--color-text-tertiary);margin-right:12px">'
             f'{len(data["archivos"])} archivo(s)</span>'
+            f'{monto_html}'
             f'{resumen_badge}'
             f'</div>',
             unsafe_allow_html=True,
