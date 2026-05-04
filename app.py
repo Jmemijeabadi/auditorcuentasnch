@@ -6,12 +6,21 @@ import unicodedata
 import smtplib
 import hashlib
 import traceback
+import logging
+from html import escape
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from datetime import datetime
 from collections import defaultdict
 
 st.set_page_config(page_title="Auditor Hospitalario", layout="wide", page_icon="🏥")
+
+# Versión corregida con base en observaciones de auditoría:
+# - Oxígeno QX se valida contra cargos QRF reales en estado de cuenta.
+# - Oxígeno recuperación se mantiene separado.
+# - Casilla azul de oxígeno queda como aviso documental, no diferencia financiera.
+# - Sevoflurano queda como verificación clínica/anestesia, no error automático.
+# - Parser de tiempo quirúrgico reconoce “horas”.
 
 # =========================================================
 # CSS GLOBAL
@@ -150,6 +159,10 @@ def normalizar(texto: str) -> str:
 
 def compact(texto: str) -> str:
     return re.sub(r"\s+", " ", texto).strip()
+
+def h(valor) -> str:
+    """Escapa texto para render HTML seguro en Streamlit/reportes."""
+    return escape(str(valor or ""), quote=True)
 
 def a_float(valor) -> float:
     try:
@@ -494,13 +507,13 @@ def _parsear_tiempo_qx(texto_norm: str):
         return round(h + mn / 60, 2)
 
     # Formato "Xhrs y YY min" / "X hrs y YY minutos"
-    m = re.search(r"(\d+)\s*(?:hrs?|horeas?)\s*(?:y|con)?\s*(\d+)\s*min", bloque)
+    m = re.search(r"(\d+)\s*(?:hrs?|horas?|horeas?)\s*(?:y|con)?\s*(\d+)\s*min", bloque)
     if m:
         h, mn = int(m.group(1)), int(m.group(2))
         return round(h + mn / 60, 2)
 
     # Formato solo horas "Xhrs" / "X hrs" / "X horeas"
-    m = re.search(r"(\d+(?:\.\d+)?)\s*(?:hrs?|horeas?)", bloque)
+    m = re.search(r"(\d+(?:\.\d+)?)\s*(?:hrs?|horas?|horeas?)", bloque)
     if m:
         return a_float(m.group(1))
 
@@ -588,15 +601,23 @@ def consolidar_por_cuenta(archivos_bytes: list) -> dict:
 
         if tipo.startswith("estado_cuenta"):
             items = extraer_todos_items(texto, nombre, tipo, cuenta)
-            # ── Fix 2: Deduplicar ítems entre cortes (EXTRAS vs PACIENTE) ──
-            existentes = {
-                (i["codigo"], i["cantidad"], i["fecha"], i["folio"])
-                for i in cuentas[cuenta]["todos_los_items"]
-            }
-            items_nuevos = [
-                i for i in items
-                if (i["codigo"], i["cantidad"], i["fecha"], i["folio"]) not in existentes
-            ]
+            # ── Deduplicar ítems entre cortes (EXTRAS vs PACIENTE) ──
+            # La llave anterior (código, cantidad, fecha, folio) podía eliminar
+            # cargos legítimos repetidos. Se usa una llave más específica.
+            def _item_key(i):
+                return (
+                    i.get("area", ""),
+                    i.get("codigo", ""),
+                    normalizar(i.get("descripcion", "")),
+                    round(i.get("cantidad", 0), 3),
+                    round(i.get("precio_unitario", 0), 2),
+                    round(i.get("subtotal", 0), 2),
+                    i.get("fecha", ""),
+                    i.get("folio", ""),
+                )
+
+            existentes = {_item_key(i) for i in cuentas[cuenta]["todos_los_items"]}
+            items_nuevos = [i for i in items if _item_key(i) not in existentes]
             cuentas[cuenta]["todos_los_items"].extend(items_nuevos)
             if cuentas[cuenta]["fecha_ingreso"] is None:
                 fi, fe, ds = extraer_fechas_estancia(texto)
@@ -863,13 +884,21 @@ def construir_auditorias(data: dict, tolerancia: float) -> list:
     ox_qx_items = por_codigo(CODIGOS_OXIGENO, "quirofano")
     cobrado_qx  = round(sum(i["cantidad"] for i in ox_qx_items), 3)
 
-    # Fuente del esperado: horas de sala
-    if sc:
-        sala_total = sc.get("sala_hrs_normal", 0.0) + sc.get("sala_hrs_adicional", 0.0)
-        # Si no se pudo extraer sala pero sí hora_total_qx, usar esa como respaldo
-        if sala_total == 0 and sc.get("hora_total_qx"):
-            sala_total = sc["hora_total_qx"]
-        esperado_qx = sala_total if sala_total > 0 else None
+    # Fuente principal del esperado: cargos reales de sala en estado de cuenta.
+    # Criterio del auditor: Oxígeno QX se relaciona contra QRF-0000002
+    # (primera hora) + QRF-0000001 (horas adicionales), NO contra la
+    # casilla azul "Oxígeno x hr" ni contra oxígeno de recuperación.
+    sala_items_qx = por_codigo({CODIGO_SALA_NORMAL, CODIGO_SALA_ADICIONAL}, "quirofano")
+    sala_total_cobrada = round(sum(i["cantidad"] for i in sala_items_qx), 3)
+
+    if sala_total_cobrada > 0:
+        esperado_qx = sala_total_cobrada
+    elif sc:
+        # Respaldo si el estado de cuenta no trae cargos QRF parseables.
+        sala_total_doc = sc.get("sala_hrs_normal", 0.0) + sc.get("sala_hrs_adicional", 0.0)
+        if sala_total_doc == 0 and sc.get("hora_total_qx"):
+            sala_total_doc = sc["hora_total_qx"]
+        esperado_qx = sala_total_doc if sala_total_doc > 0 else None
     else:
         esperado_qx = None
 
@@ -879,19 +908,27 @@ def construir_auditorias(data: dict, tolerancia: float) -> list:
 
         # Nota explicativa con desglose y referencia al campo "casilla azul"
         nota_partes = []
-        if sc:
+        if sala_total_cobrada > 0:
+            normal_cob = sum(i["cantidad"] for i in sala_items_qx if i["codigo"] == CODIGO_SALA_NORMAL)
+            adicional_cob = sum(i["cantidad"] for i in sala_items_qx if i["codigo"] == CODIGO_SALA_ADICIONAL)
             nota_partes.append(
-                f"Esperado calculado desde horas de sala: "
-                f"{sc.get('sala_hrs_normal',0):.0f} hr normal + "
-                f"{sc.get('sala_hrs_adicional',0):.0f} hr adicional = "
-                f"{(sc.get('sala_hrs_normal',0)+sc.get('sala_hrs_adicional',0)):.0f} hrs."
+                f"Esperado calculado desde cargos QRF en estado de cuenta: "
+                f"{normal_cob:.0f} hr normal + {adicional_cob:.0f} hr adicional = "
+                f"{sala_total_cobrada:.0f} hrs."
             )
+        elif sc:
+            nota_partes.append(
+                f"Sin cargos QRF parseables; esperado calculado como respaldo desde hoja de servicios: "
+                f"{sc.get('sala_hrs_normal',0):.0f} hr normal + "
+                f"{sc.get('sala_hrs_adicional',0):.0f} hr adicional."
+            )
+
+        if sc:
             ox_doc = sc.get("oxigeno_qx", 0)
             if ox_doc and abs(ox_doc - (esperado_qx or 0)) > 0.01:
                 nota_partes.append(
                     f"Hoja de servicios marca {ox_doc:.0f} hrs en el campo 'Oxígeno x hr' "
-                    f"(este dato no se usa por indicación del auditor; "
-                    f"la fuente correcta son las horas de sala)."
+                    f"(dato informativo; no define el cobro de oxígeno QX)."
                 )
 
         auditorias.append({
@@ -928,9 +965,10 @@ def construir_auditorias(data: dict, tolerancia: float) -> list:
                 status_av = (f"casilla azul marca {ox_qx_doc:.0f} hrs cuando "
                              f"la sala fue de {sala_total_doc:.0f} hrs — "
                              f"verificar con enfermería")
-                clase_av  = "warn"
+                # Aviso documental: no debe convertir la cuenta en “Con diferencias”.
+                clase_av  = "gray"
             auditorias.append({
-                "categoria": "Oxígeno",
+                "categoria": "Avisos de documentación",
                 "key":       "aviso_casilla_azul",
                 "label":     "Aviso a enfermería: casilla azul de oxígeno",
                 "tipo":      "informativo",
@@ -1083,6 +1121,15 @@ def construir_auditorias(data: dict, tolerancia: float) -> list:
 
     if sevo_items or sevo_esp:
         status, diff, clase = evaluar(sevo_cobrado, sevo_esp, tolerancia=1.0)
+        # Criterio del auditor: sevoflurano es una verificación clínica/anestesia,
+        # no una diferencia financiera automática. Si no coincide, se muestra como
+        # informativo para revisión médica.
+        if clase in ("err", "warn"):
+            status = (
+                f"verificar con anestesia — documentado {sevo_esp or 0:.2f} ml; "
+                f"cobrado {sevo_cobrado:.2f} ml"
+            )
+            clase = "gray"
         # Fix 4: Desglose por folio
         desglose = " + ".join(
             f"{i['cantidad']:.0f} ml ({i['folio']})" for i in sevo_items
@@ -1550,7 +1597,7 @@ def construir_auditorias(data: dict, tolerancia: float) -> list:
     hab_items = por_codigo(CODIGOS_HABITACION)
     hab_cobrado = len(hab_items)
     if hab_items or dias:
-        status, diff, clase = evaluar(float(hab_cobrado), float(dias) if dias else None, 0)
+        status, diff, clase = evaluar(float(hab_cobrado), float(dias) if dias is not None else None, 0)
         auditorias.append({
             "categoria": "Estancia",
             "key":       "habitacion",
@@ -1558,7 +1605,7 @@ def construir_auditorias(data: dict, tolerancia: float) -> list:
             "tipo":      "numerico",
             "unidad":    "días",
             "cobrado":   float(hab_cobrado),
-            "esperado":  float(dias) if dias else None,
+            "esperado":  float(dias) if dias is not None else None,
             "status":    status,
             "diff":      diff,
             "clase":     clase,
@@ -1567,7 +1614,7 @@ def construir_auditorias(data: dict, tolerancia: float) -> list:
             "nota_auditoria": (
                 f"Ingreso {data['fecha_ingreso']} → egreso {data['fecha_egreso']} "
                 f"= {dias} noche(s)."
-            ) if dias else None,
+            ) if dias is not None else None,
         })
 
     # Bomba de infusión (existente)
@@ -1588,7 +1635,7 @@ def construir_auditorias(data: dict, tolerancia: float) -> list:
             "tipo":      "numerico",
             "unidad":    "días",
             "cobrado":   float(bomba_cobrado),
-            "esperado":  float(dias) if dias else None,
+            "esperado":  float(dias) if dias is not None else None,
             "status":    status,
             "diff":      None,
             "clase":     clase,
@@ -1776,7 +1823,7 @@ def render_tabla_items(items: list, cols: list):
             mono  = ' class="mono"' if c[1] == "m" else ""
             if isinstance(v, float):
                 v = f"{v:.3f}" if "cantidad" in c[2] else f"{v:.2f}"
-            celdas += f'<td{align}{mono}>{v}</td>'
+            celdas += f'<td{align}{mono}>{h(v)}</td>'
         filas += f"<tr>{celdas}</tr>"
     st.markdown(
         f'<table class="ev-table"><thead><tr>{encabezados}</tr></thead>'
@@ -1872,10 +1919,11 @@ def render_auditoria(audit: dict):
 # LOG POR EMAIL  (invisible al usuario)
 # =========================================================
 def _hash_archivos(archivos_bytes: list) -> str:
-    h = hashlib.md5()
+    h = hashlib.sha256()
     for nombre, contenido in archivos_bytes:
-        h.update(nombre.encode())
-        h.update(contenido[:256])
+        h.update(nombre.encode("utf-8"))
+        h.update(str(len(contenido)).encode("utf-8"))
+        h.update(contenido)
     return h.hexdigest()
 
 def _construir_html_log(
@@ -2047,7 +2095,7 @@ def _enviar_log_email(
             servidor.sendmail(smtp_user, destino, msg.as_string())
 
     except Exception:
-        pass
+        logging.exception("Error enviando log de auditoría")
 
 
 # =========================================================
