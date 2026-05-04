@@ -308,7 +308,8 @@ ITEM_RE = re.compile(
     r"(?P<impuesto>[\d,]+\.\d{2})\s+"
     r"(?P<total>[\d,]+\.\d{2})"
     r"(?:\s+(?P<fecha_folio>\S+))?"
-    r"(?:\s+(?P<folio2>\S+))?$",
+    r"(?:\s+(?P<folio2>\S+))?"
+    r"(?:\s+(?P<factura>\S+))?$",   # NCTA-XXXX y similares (campo Factura)
     re.IGNORECASE,
 )
 
