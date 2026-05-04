@@ -646,6 +646,11 @@ def consolidar_por_cuenta(archivos_bytes: list) -> dict:
                     sc["arco_c_hrs"] = sc_nuevo["arco_c_hrs"]
                 if not sc["microscopio"]:
                     sc["microscopio"] = sc_nuevo["microscopio"]
+                # ── Acumular servicios binarios marcados (OR lógico) ──
+                if "servicios_marcados" in sc and "servicios_marcados" in sc_nuevo:
+                    for k_bin in sc_nuevo["servicios_marcados"]:
+                        if sc_nuevo["servicios_marcados"][k_bin]:
+                            sc["servicios_marcados"][k_bin] = True
 
             # Actualizar seguro desde servicios (tiene prioridad sobre estado de cuenta)
             sc_actual = cuentas[cuenta]["servicios_cirugia"]
@@ -860,37 +865,92 @@ def construir_auditorias(data: dict, tolerancia: float) -> list:
             })
 
     # ══════════════════════════════════════════════════════
-    # 1. OXÍGENO (existente)
+    # CAMBIO 1 — OXÍGENO QX: el esperado se calcula desde las horas de sala
+    # (HORA TOTAL DE QUIRÓFANO = sala normal + sala adicional), NO del campo
+    # "Oxígeno x hr" de la hoja de servicios. Indicación del auditor:
+    # "No tomar dato de casilla azul" — suelen equivocarse al marcarla.
     # ══════════════════════════════════════════════════════
-    for area_key, area_label, esp_key in [
-        ("quirofano",      "Quirófano",     "oxigeno_qx"),
-        ("recuperacion",   "Recuperación",  "oxigeno_rec"),
-    ]:
-        ox_items = por_codigo(CODIGOS_OXIGENO, area_key)
-        cobrado  = round(sum(i["cantidad"] for i in ox_items), 3)
-        esperado = sc.get(esp_key, 0.0) or None if sc else None
-        if not sc:
-            esperado = None
-        elif sc.get(esp_key, 0.0) == 0 and cobrado == 0:
-            continue
-        status, diff, clase = evaluar(cobrado, esperado, tolerancia)
+    ox_qx_items = por_codigo(CODIGOS_OXIGENO, "quirofano")
+    cobrado_qx  = round(sum(i["cantidad"] for i in ox_qx_items), 3)
+
+    # Fuente del esperado: horas de sala
+    if sc:
+        sala_total = sc.get("sala_hrs_normal", 0.0) + sc.get("sala_hrs_adicional", 0.0)
+        # Si no se pudo extraer sala pero sí hora_total_qx, usar esa como respaldo
+        if sala_total == 0 and sc.get("hora_total_qx"):
+            sala_total = sc["hora_total_qx"]
+        esperado_qx = sala_total if sala_total > 0 else None
+    else:
+        esperado_qx = None
+
+    # Solo agregar la auditoría si hay algo que validar
+    if ox_qx_items or (esperado_qx is not None and esperado_qx > 0):
+        status, diff, clase = evaluar(cobrado_qx, esperado_qx, tolerancia)
+
+        # Nota explicativa con desglose y referencia al campo "casilla azul"
+        nota_partes = []
+        if sc:
+            nota_partes.append(
+                f"Esperado calculado desde horas de sala: "
+                f"{sc.get('sala_hrs_normal',0):.0f} hr normal + "
+                f"{sc.get('sala_hrs_adicional',0):.0f} hr adicional = "
+                f"{(sc.get('sala_hrs_normal',0)+sc.get('sala_hrs_adicional',0)):.0f} hrs."
+            )
+            ox_doc = sc.get("oxigeno_qx", 0)
+            if ox_doc and abs(ox_doc - (esperado_qx or 0)) > 0.01:
+                nota_partes.append(
+                    f"Hoja de servicios marca {ox_doc:.0f} hrs en el campo 'Oxígeno x hr' "
+                    f"(este dato no se usa por indicación del auditor; "
+                    f"la fuente correcta son las horas de sala)."
+                )
+
         auditorias.append({
             "categoria": "Oxígeno",
-            "key":       f"oxigeno_{area_key}",
-            "label":     f"Oxígeno — {area_label}",
+            "key":       "oxigeno_quirofano",
+            "label":     "Oxígeno — Quirófano",
             "tipo":      "numerico",
             "unidad":    "hrs",
-            "cobrado":   cobrado,
-            "esperado":  esperado,
+            "cobrado":   cobrado_qx,
+            "esperado":  esperado_qx,
             "status":    status,
             "diff":      diff,
             "clase":     clase,
-            "items_cobrados":  ox_items,
-            "items_esperados": [e for e in sc.get("evidencias_oxigeno",[])
-                                if e["area"] == area_key],
+            "items_cobrados":  ox_qx_items,
+            "items_esperados": [e for e in sc.get("evidencias_oxigeno", [])
+                                if e["area"] == "quirofano"],
+            "nota_auditoria": " ".join(nota_partes) if nota_partes else None,
+        })
+
+    # ── Oxígeno recuperación: se conserva la lógica original ──
+    # (compara contra el campo "Oxígeno recuperación" de la hoja de servicios)
+    ox_rec_items = por_codigo(CODIGOS_OXIGENO, "recuperacion")
+    cobrado_rec  = round(sum(i["cantidad"] for i in ox_rec_items), 3)
+    esperado_rec = sc.get("oxigeno_rec", 0.0) if sc else None
+    if not sc:
+        esperado_rec = None
+    elif sc.get("oxigeno_rec", 0.0) == 0 and cobrado_rec == 0:
+        esperado_rec = None  # nada que validar, omitimos
+
+    if esperado_rec is not None or ox_rec_items:
+        status, diff, clase = evaluar(cobrado_rec, esperado_rec, tolerancia)
+        auditorias.append({
+            "categoria": "Oxígeno",
+            "key":       "oxigeno_recuperacion",
+            "label":     "Oxígeno — Recuperación",
+            "tipo":      "numerico",
+            "unidad":    "hrs",
+            "cobrado":   cobrado_rec,
+            "esperado":  esperado_rec,
+            "status":    status,
+            "diff":      diff,
+            "clase":     clase,
+            "items_cobrados":  ox_rec_items,
+            "items_esperados": [e for e in sc.get("evidencias_oxigeno", [])
+                                if e["area"] == "recuperacion"],
             "nota_auditoria": None,
         })
 
+    # ── Oxígeno hospitalización: solo informativo ──
     ox_hosp = por_codigo(CODIGOS_OXIGENO, "hospitalizacion")
     if ox_hosp:
         cobrado_h = round(sum(i["cantidad"] for i in ox_hosp), 3)
@@ -1128,21 +1188,43 @@ def construir_auditorias(data: dict, tolerancia: float) -> list:
         })
 
     # ══════════════════════════════════════════════════════
-    # PUNTO 10: Microscopio + funda
+    # CAMBIO 4 — MICROSCOPIO + FUNDA (validación bidireccional)
+    # Antes: solo si está el microscopio se buscaba la funda.
+    # Ahora: si la funda aparece sin microscopio documentado ni cobrado,
+    # también se genera un aviso para que el revisor lo confirme con el área.
     # ══════════════════════════════════════════════════════
     micro_items = por_codigo({CODIGO_MICROSCOPIO}, "quirofano")
     funda_micro = por_codigo({CODIGO_FUNDA_MICROSCOPIO}, "quirofano")
-    if micro_items:
-        if funda_micro:
-            status = "ok — microscopio y funda presentes"
-            clase  = "ok"
+    micro_marcado = sc.get("servicios_marcados", {}).get("microscopio", False) if sc else False
+
+    if micro_items or funda_micro or micro_marcado:
+        if micro_items:
+            # Caso original: microscopio presente, validar que tenga funda
+            if funda_micro:
+                status = "ok — microscopio y funda presentes"
+                clase  = "ok"
+            else:
+                status = "microscopio cobrado sin funda (ALM-0000878)"
+                clase  = "err"
+        elif funda_micro and not micro_marcado:
+            # Nuevo caso: funda sin microscopio cobrado ni marcado
+            status = ("funda de microscopio cobrada sin uso documentado de microscopio — "
+                      "verificar con el área")
+            clase  = "warn"
+        elif funda_micro and micro_marcado:
+            # Marcado pero no cobrado, con funda presente
+            status = ("funda presente y microscopio marcado en hoja de servicios "
+                      "pero no cobrado — confirmar con el área")
+            clase  = "warn"
         else:
-            status = "microscopio cobrado sin funda (ALM-0000878)"
-            clase  = "err"
+            # Marcado pero ni microscopio ni funda cobrados
+            status = "microscopio marcado en hoja de servicios pero no cobrado"
+            clase  = "gray"
+
         auditorias.append({
             "categoria": "Accesorios complementarios",
             "key":       "microscopio_funda",
-            "label":     "Microscopio → funda",
+            "label":     "Microscopio ↔ funda",
             "tipo":      "informativo",
             "unidad":    "",
             "cobrado":   0,
@@ -1152,25 +1234,50 @@ def construir_auditorias(data: dict, tolerancia: float) -> list:
             "clase":     clase,
             "items_cobrados":  micro_items + funda_micro,
             "items_esperados": [],
-            "nota_auditoria": "Uso de microscopio debe ir con funda desechable.",
+            "nota_auditoria": (
+                "Validación bidireccional: el uso de microscopio debe ir con funda desechable, "
+                "y la presencia de funda sin microscopio documentado se verifica con el área."
+            ),
         })
 
     # ══════════════════════════════════════════════════════
-    # PUNTO 11: Arco en C + funda
+    # CAMBIO 4 — ARCO EN C + FUNDA (validación bidireccional)
+    # Antes: solo si está el arco se buscaba la funda.
+    # Ahora: si la funda aparece sin arco documentado ni cobrado,
+    # también se genera un aviso para que el revisor lo confirme con el área.
     # ══════════════════════════════════════════════════════
-    arco_items = por_codigo({CODIGO_ARCO_C}, "quirofano")
-    funda_arco = por_codigo({CODIGO_FUNDA_ARCO_C}, "quirofano")
-    if arco_items:
-        if funda_arco:
-            status = "ok — arco en C y funda presentes"
-            clase  = "ok"
+    arco_items   = por_codigo({CODIGO_ARCO_C}, "quirofano")
+    funda_arco   = por_codigo({CODIGO_FUNDA_ARCO_C}, "quirofano")
+    arco_marcado = sc.get("servicios_marcados", {}).get("arco_c", False) if sc else False
+
+    if arco_items or funda_arco or arco_marcado:
+        if arco_items:
+            # Caso original: arco presente, validar que tenga funda
+            if funda_arco:
+                status = "ok — arco en C y funda presentes"
+                clase  = "ok"
+            else:
+                status = "arco en C cobrado sin funda (ALM-0000877)"
+                clase  = "err"
+        elif funda_arco and not arco_marcado:
+            # Nuevo caso: funda sin arco cobrado ni marcado
+            status = ("funda de arco en C cobrada sin uso documentado de arco — "
+                      "verificar con el área")
+            clase  = "warn"
+        elif funda_arco and arco_marcado:
+            # Marcado pero no cobrado, con funda presente
+            status = ("funda presente y arco marcado en hoja de servicios "
+                      "pero no cobrado — confirmar con el área")
+            clase  = "warn"
         else:
-            status = "arco en C cobrado sin funda (ALM-0000877)"
-            clase  = "err"
+            # Marcado pero ni arco ni funda cobrados
+            status = "arco en C marcado en hoja de servicios pero no cobrado"
+            clase  = "gray"
+
         auditorias.append({
             "categoria": "Accesorios complementarios",
             "key":       "arco_funda",
-            "label":     "Arco en C → funda",
+            "label":     "Arco en C ↔ funda",
             "tipo":      "informativo",
             "unidad":    "",
             "cobrado":   0,
@@ -1180,25 +1287,83 @@ def construir_auditorias(data: dict, tolerancia: float) -> list:
             "clase":     clase,
             "items_cobrados":  arco_items + funda_arco,
             "items_esperados": [],
-            "nota_auditoria": "Uso de arco en C debe ir con funda estéril desechable.",
+            "nota_auditoria": (
+                "Validación bidireccional: el uso de arco en C debe ir con funda estéril desechable, "
+                "y la presencia de funda sin arco documentado se verifica con el área."
+            ),
         })
 
     # ══════════════════════════════════════════════════════
-    # PUNTO 5: Trío de recuperación (sala + monitor + oxígeno)
+    # CAMBIO 2 — TRÍO DE RECUPERACIÓN (sala + monitor + oxígeno)
+    # Antes: warning automático si faltaba alguno.
+    # Ahora: comparación bidireccional contra lo marcado en la hoja de servicios.
+    # Por indicación del auditor: a veces enfermería se les pasa marcarlo
+    # o cargarlo, y desde ahí entran a corroborar con el área (WhatsApp).
     # ══════════════════════════════════════════════════════
     rec_sala    = por_codigo({"REC-0000001"}, "recuperacion")
     rec_monitor = por_codigo({"IBM-0000010"}, "recuperacion")
     rec_oxigeno = por_codigo(CODIGOS_OXIGENO, "recuperacion")
 
-    presentes_rec = {
-        "Sala de recuperación":  len(rec_sala) > 0,
-        "Monitor SV":           len(rec_monitor) > 0,
-        "Oxígeno recuperación": len(rec_oxigeno) > 0,
-    }
-    n_presentes = sum(presentes_rec.values())
+    # Lo marcado en hoja de servicios
+    sm = sc.get("servicios_marcados", {}) if sc else {}
+    marc_sala    = sm.get("sala_rec", False)
+    marc_monitor = sm.get("monitor_rec", False)
+    marc_oxigeno = (sc.get("oxigeno_rec", 0) > 0) if sc else False
 
-    if n_presentes > 0 and n_presentes < 3:
-        faltantes = [k for k, v in presentes_rec.items() if not v]
+    cobrado_dict = {
+        "Sala de recuperación":  len(rec_sala) > 0,
+        "Monitor SV":            len(rec_monitor) > 0,
+        "Oxígeno recuperación":  len(rec_oxigeno) > 0,
+    }
+    marcado_dict = {
+        "Sala de recuperación":  marc_sala,
+        "Monitor SV":            marc_monitor,
+        "Oxígeno recuperación":  marc_oxigeno,
+    }
+
+    # Solo evaluar si hay algo marcado o cobrado
+    hay_actividad = any(cobrado_dict.values()) or any(marcado_dict.values())
+
+    if hay_actividad:
+        # Buscar discrepancias en cualquier dirección
+        marcados_no_cobrados = [
+            k for k in cobrado_dict
+            if marcado_dict[k] and not cobrado_dict[k]
+        ]
+        cobrados_no_marcados = [
+            k for k in cobrado_dict
+            if cobrado_dict[k] and not marcado_dict[k]
+        ]
+
+        if not marcados_no_cobrados and not cobrados_no_marcados:
+            # Todo coincide: lo que está marcado está cobrado y viceversa
+            n_presentes = sum(cobrado_dict.values())
+            if n_presentes == 3:
+                status = "ok — los 3 conceptos coinciden entre hoja de servicios y cuenta"
+            else:
+                presentes = [k for k, v in cobrado_dict.items() if v]
+                status = f"ok — coinciden hoja vs cuenta ({', '.join(presentes) or 'sin cargos'})"
+            clase = "ok"
+            nota_trio = None
+        else:
+            # Hay discrepancia: dejar como informativo (no warning ni error rojo)
+            partes = []
+            if marcados_no_cobrados:
+                partes.append(
+                    f"marcado(s) en hoja pero no cobrado(s): {', '.join(marcados_no_cobrados)}"
+                )
+            if cobrados_no_marcados:
+                partes.append(
+                    f"cobrado(s) sin estar marcado(s) en hoja: {', '.join(cobrados_no_marcados)}"
+                )
+            status = "discrepancia — " + "; ".join(partes)
+            clase  = "warn"
+            nota_trio = (
+                "Comparación entre hoja de servicios y estado de cuenta. "
+                "Puede ser que enfermería haya omitido marcarlo o cargarlo. "
+                "Confirmar con el área (grupo de WhatsApp)."
+            )
+
         auditorias.append({
             "categoria": "Consistencia de servicios",
             "key":       "trio_recuperacion",
@@ -1207,31 +1372,12 @@ def construir_auditorias(data: dict, tolerancia: float) -> list:
             "unidad":    "",
             "cobrado":   0,
             "esperado":  None,
-            "status":    f"incompleto — falta(n): {', '.join(faltantes)}",
+            "status":    status,
             "diff":      None,
-            "clase":     "warn",
+            "clase":     clase,
             "items_cobrados":  rec_sala + rec_monitor + rec_oxigeno,
             "items_esperados": [],
-            "nota_auditoria": (
-                "Los 3 conceptos de recuperación (sala, monitor y oxígeno) "
-                "deben estar todos presentes en el segmento de recuperación."
-            ),
-        })
-    elif n_presentes == 3:
-        auditorias.append({
-            "categoria": "Consistencia de servicios",
-            "key":       "trio_recuperacion",
-            "label":     "Trío de recuperación (sala + monitor + oxígeno)",
-            "tipo":      "informativo",
-            "unidad":    "",
-            "cobrado":   0,
-            "esperado":  None,
-            "status":    "ok — los 3 conceptos presentes en recuperación",
-            "diff":      None,
-            "clase":     "ok",
-            "items_cobrados":  rec_sala + rec_monitor + rec_oxigeno,
-            "items_esperados": [],
-            "nota_auditoria": None,
+            "nota_auditoria": nota_trio,
         })
 
     # ══════════════════════════════════════════════════════
@@ -1302,47 +1448,72 @@ def construir_auditorias(data: dict, tolerancia: float) -> list:
         })
 
     # ══════════════════════════════════════════════════════
-    # 5. ESTANCIA (existente + Punto 6 RPBI)
+    # 5. ESTANCIA
     # ══════════════════════════════════════════════════════
 
-    # ── PUNTO 6: RPBI después de 7 días ──────────────────
+    # ══════════════════════════════════════════════════════
+    # CAMBIO 3 — RPBI: regla actualizada con mínimo obligatorio
+    # Por indicación del auditor: en TODAS las cuentas (particulares,
+    # convenio y seguros), desde el ingreso a habitación debe existir
+    # mínimo un cargo de Disposición de RPBI. Pasando 7 días, otro cargo
+    # adicional, y así sucesivamente.
+    # ══════════════════════════════════════════════════════
     rpbi_items = por_codigo({CODIGO_RPBI})
     rpbi_count = len(rpbi_items)
-    if rpbi_items or dias:
-        if dias and dias > DIAS_RPBI_ADICIONAL:
-            rpbi_esperado = 1 + ((dias - 1) // DIAS_RPBI_ADICIONAL)
-            if rpbi_count < rpbi_esperado:
-                status = (f"estancia {dias} días > {DIAS_RPBI_ADICIONAL}: "
-                          f"se esperan {rpbi_esperado} cargo(s), hay {rpbi_count}")
-                clase = "err"
-            else:
-                status = f"ok — {rpbi_count} cargo(s) para {dias} día(s)"
-                clase = "ok"
-        elif dias:
-            status = f"ok — {rpbi_count} cargo(s) para {dias} día(s) (≤{DIAS_RPBI_ADICIONAL})"
-            clase = "ok"
-        else:
-            status = f"{rpbi_count} cargo(s) — sin datos de estancia"
-            clase = "gray"
 
-        auditorias.append({
-            "categoria": "Estancia",
-            "key":       "rpbi",
-            "label":     "Disposición de RPBI",
-            "tipo":      "numerico",
-            "unidad":    "cargo(s)",
-            "cobrado":   float(rpbi_count),
-            "esperado":  None,
-            "status":    status,
-            "diff":      None,
-            "clase":     clase,
-            "items_cobrados":  rpbi_items,
-            "items_esperados": [],
-            "nota_auditoria": (
-                f"Regla: después de {DIAS_RPBI_ADICIONAL} días se debe cargar otro RPBI. "
-                f"Estancia: {dias or '?'} día(s)."
-            ),
-        })
+    # Calcular cantidad esperada según días de estancia
+    if dias is not None and dias > 0:
+        # 1 cargo al ingreso + 1 adicional por cada 7 días completos posteriores
+        rpbi_esperado = 1 + (max(dias - 1, 0) // DIAS_RPBI_ADICIONAL)
+    elif dias == 0:
+        # Mismo día de ingreso/egreso — al menos 1 cargo
+        rpbi_esperado = 1
+    else:
+        # Sin datos de estancia, se requiere mínimo 1
+        rpbi_esperado = 1
+
+    # Determinar status y clase
+    if rpbi_count == 0:
+        # Caso crítico: ninguna cuenta debería tener cero RPBI
+        status = (f"FALTA cargo de RPBI — toda cuenta debe tener mínimo 1 "
+                  f"({CODIGO_RPBI})")
+        clase  = "err"
+    elif rpbi_count < rpbi_esperado:
+        # Tiene RPBI pero menos de los esperados por días
+        status = (f"insuficiente — {rpbi_count} cargo(s) para "
+                  f"{dias if dias is not None else '?'} día(s); "
+                  f"se esperan {rpbi_esperado}")
+        clase = "err"
+    elif rpbi_count == rpbi_esperado:
+        status = (f"ok — {rpbi_count} cargo(s) para "
+                  f"{dias if dias is not None else '?'} día(s)")
+        clase = "ok"
+    else:
+        # Hay más cargos de los esperados — no es error pero conviene revisar
+        status = (f"{rpbi_count} cargo(s) para {dias if dias is not None else '?'} día(s); "
+                  f"se esperaban {rpbi_esperado}")
+        clase = "warn"
+
+    auditorias.append({
+        "categoria": "Estancia",
+        "key":       "rpbi",
+        "label":     "Disposición de RPBI",
+        "tipo":      "numerico",
+        "unidad":    "cargo(s)",
+        "cobrado":   float(rpbi_count),
+        "esperado":  float(rpbi_esperado),
+        "status":    status,
+        "diff":      None,
+        "clase":     clase,
+        "items_cobrados":  rpbi_items,
+        "items_esperados": [],
+        "nota_auditoria": (
+            f"Regla: toda cuenta (particular, convenio o seguro) debe tener mínimo "
+            f"1 cargo de RPBI al ingreso a habitación; un cargo adicional por cada "
+            f"{DIAS_RPBI_ADICIONAL} días completos posteriores. "
+            f"Estancia: {dias if dias is not None else '?'} día(s)."
+        ),
+    })
 
     # Días de habitación
     hab_items = por_codigo({CODIGO_HABITACION})
@@ -1426,7 +1597,7 @@ def construir_auditorias(data: dict, tolerancia: float) -> list:
     return auditorias
 
 # =========================================================
-# FIX 3: REPORTE HTML DESCARGABLE POR CUENTA
+# Fix 3: REPORTE HTML DESCARGABLE POR CUENTA
 # =========================================================
 def _construir_html_reporte_cuenta(
     cuenta: str, data: dict, auds: list, file_hash: str,
@@ -1843,11 +2014,11 @@ with st.sidebar:
         "**Categorías auditadas:**\n"
         "- Validación de tiempos (hora total, minuto 21)\n"
         "- Consistencia de servicios (sala vs O₂, trío recuperación)\n"
-        "- Oxígeno (QX, recuperación, hosp.)\n"
+        "- Oxígeno (QX vs sala, recuperación, hosp.)\n"
         "- Sala quirúrgica (horas, sevoflurano)\n"
         "- Equipos y servicios (binarios)\n"
-        "- Accesorios complementarios (8 validaciones)\n"
-        "- Verificaciones negativas (2)\n"
+        "- Accesorios complementarios (bidireccionales)\n"
+        "- Verificaciones negativas\n"
         "- Estancia (habitación, bomba, dietas, RPBI)"
     )
 
