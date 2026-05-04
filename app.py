@@ -21,6 +21,10 @@ st.set_page_config(page_title="Auditor Hospitalario", layout="wide", page_icon="
 # - Casilla azul de oxígeno queda como aviso documental, no diferencia financiera.
 # - Sevoflurano queda como verificación clínica/anestesia, no error automático.
 # - Parser de tiempo quirúrgico reconoce “horas”.
+# - Habitación ambulatoria espera 1 cargo aunque la estancia calculada sea 0 días.
+# - Hemotransfusión con SÍ en nota queda como verificación médica, no diferencia financiera automática.
+# - Bomba de infusión vs equipo infusomat se valida por cantidades, no solo por existencia.
+# - Mejor redacción para máquina de anestesia en particulares vs convenio/seguro.
 
 # =========================================================
 # CSS GLOBAL
@@ -871,7 +875,8 @@ def construir_auditorias(data: dict, tolerancia: float) -> list:
                 "items_esperados": [],
                 "nota_auditoria": (
                     f"Seguro: {seguro or 'no identificado'}. "
-                    f"Regla: no se cobra máquina de anestesia en pacientes particulares."
+                    f"Regla: no se cobra en particulares; en convenios/seguros, "
+                    f"si está documentada y no cobrada, verificar."
                 ),
             })
 
@@ -1227,40 +1232,48 @@ def construir_auditorias(data: dict, tolerancia: float) -> list:
 
     # ══════════════════════════════════════════════════════
     # PUNTO 9: Bomba de infusión + equipo infusomat
+    # Validación por cantidad: no basta con que exista un equipo; debe
+    # haber al menos la misma cantidad de equipos infusomat que usos de bomba.
     # ══════════════════════════════════════════════════════
     bomba_items_qx = por_codigo({CODIGO_BOMBA})
     equipo_inf = por_codigo({CODIGO_EQUIPO_INFUSOMAT})
-    if bomba_items_qx and not equipo_inf:
+    cant_bombas = round(sum(i.get("cantidad", 0) for i in bomba_items_qx), 3)
+    cant_infusomat = round(sum(i.get("cantidad", 0) for i in equipo_inf), 3)
+
+    if bomba_items_qx:
+        if cant_infusomat == 0:
+            status_bomba = "bomba cobrada sin equipo infusomat (ALM-0000869)"
+            clase_bomba = "err"
+            nota_bomba = "Cada uso de bomba de infusión debe ir con equipo infusomat."
+        elif cant_infusomat < cant_bombas:
+            status_bomba = (
+                f"verificar — {cant_bombas:.0f} bomba(s) y "
+                f"{cant_infusomat:.0f} equipo(s) infusomat"
+            )
+            clase_bomba = "warn"
+            nota_bomba = (
+                "La validación se realiza por cantidad. Si un solo equipo infusomat "
+                "cubre varios días por continuidad clínica, confirmar con enfermería/almacén."
+            )
+        else:
+            status_bomba = f"ok — {cant_bombas:.0f} bomba(s), {cant_infusomat:.0f} equipo(s)"
+            clase_bomba = "ok"
+            nota_bomba = None
+
         auditorias.append({
             "categoria": "Accesorios complementarios",
             "key":       "bomba_infusomat",
             "label":     "Bomba de infusión → equipo infusomat",
             "tipo":      "informativo",
             "unidad":    "",
-            "cobrado":   0,
-            "esperado":  None,
-            "status":    "bomba cobrada sin equipo infusomat (ALM-0000869)",
+            "cobrado":   cant_bombas,
+            "esperado":  cant_infusomat,
+            "status":    status_bomba,
             "diff":      None,
-            "clase":     "err",
-            "items_cobrados":  bomba_items_qx,
-            "items_esperados": [],
-            "nota_auditoria": "Cada uso de bomba de infusión debe ir con equipo infusomat.",
-        })
-    elif bomba_items_qx and equipo_inf:
-        auditorias.append({
-            "categoria": "Accesorios complementarios",
-            "key":       "bomba_infusomat",
-            "label":     "Bomba de infusión → equipo infusomat",
-            "tipo":      "informativo",
-            "unidad":    "",
-            "cobrado":   0,
-            "esperado":  None,
-            "status":    f"ok — {len(bomba_items_qx)} bomba(s), {len(equipo_inf)} equipo(s)",
-            "diff":      None,
-            "clase":     "ok",
+            "clase":     clase_bomba,
             "items_cobrados":  bomba_items_qx + equipo_inf,
             "items_esperados": [],
-            "nota_auditoria": None,
+            "nota_auditoria": nota_bomba,
         })
 
     # ══════════════════════════════════════════════════════
@@ -1470,9 +1483,9 @@ def construir_auditorias(data: dict, tolerancia: float) -> list:
         elif hemotrans is False and sangre_items:
             status, clase = "nota dice NO pero hay cargos — verificar", "err"
         elif hemotrans is True and sangre_items:
-            status, clase = "nota dice SÍ y hay cargos — verificar concordancia", "warn"
+            status, clase = "verificar con equipo médico — nota dice SÍ y hay cargos de sangre", "gray"
         elif hemotrans is True and not sangre_items:
-            status, clase = "nota dice SÍ pero no hay cargos de sangre", "warn"
+            status, clase = "verificar con equipo médico — nota dice SÍ pero no hay cargos de sangre", "gray"
         else:
             status, clase = "sin información en nota post-qx", "gray"
         auditorias.append({
@@ -1490,7 +1503,9 @@ def construir_auditorias(data: dict, tolerancia: float) -> list:
             "items_esperados": [],
             "nota_auditoria": (
                 f"Nota post-quirúrgica: hemotransfusión = "
-                f"{'SÍ' if hemotrans else 'NO' if hemotrans is False else 'no documentada'}."
+                f"{'SÍ' if hemotrans else 'NO' if hemotrans is False else 'no documentada'}. "
+                f"Este punto se deja como verificación médica cuando la nota indica SÍ; "
+                f"no se considera diferencia financiera automática."
             ),
         })
 
@@ -1594,10 +1609,38 @@ def construir_auditorias(data: dict, tolerancia: float) -> list:
     })
 
     # Días de habitación
+    # Regla ajustada: habitación ambulatoria (HOS-0000003) espera 1 cargo
+    # aunque el cálculo de noches sea 0. Para habitación estándar se conserva
+    # la comparación contra noches, pero las diferencias se dejan como verificar
+    # para evitar falso error crítico cuando hay paquetes/convenios.
     hab_items = por_codigo(CODIGOS_HABITACION)
     hab_cobrado = len(hab_items)
-    if hab_items or dias:
-        status, diff, clase = evaluar(float(hab_cobrado), float(dias) if dias is not None else None, 0)
+    hay_hab_ambulatoria = any(i["codigo"] == "HOS-0000003" for i in hab_items)
+
+    if hay_hab_ambulatoria:
+        esperado_hab = 1.0
+        nota_hab_base = (
+            "Cuenta con habitación ambulatoria (HOS-0000003): se espera 1 cargo "
+            "aunque la estancia calculada sea 0 noches."
+        )
+    elif dias is not None:
+        esperado_hab = float(dias)
+        nota_hab_base = (
+            f"Ingreso {data['fecha_ingreso']} → egreso {data['fecha_egreso']} "
+            f"= {dias} noche(s). Confirmar política de cobro en paquetes/convenios "
+            f"si existe diferencia."
+        )
+    else:
+        esperado_hab = None
+        nota_hab_base = "Sin fechas de estancia suficientes para calcular días esperados."
+
+    if hab_items or dias is not None:
+        status, diff, clase = evaluar(float(hab_cobrado), esperado_hab, 0)
+        if clase == "err":
+            # La diferencia de habitación requiere confirmación operativa antes
+            # de tratarse como error financiero crítico.
+            clase = "warn"
+            status = "verificar — " + status
         auditorias.append({
             "categoria": "Estancia",
             "key":       "habitacion",
@@ -1605,16 +1648,13 @@ def construir_auditorias(data: dict, tolerancia: float) -> list:
             "tipo":      "numerico",
             "unidad":    "días",
             "cobrado":   float(hab_cobrado),
-            "esperado":  float(dias) if dias is not None else None,
+            "esperado":  esperado_hab,
             "status":    status,
             "diff":      diff,
             "clase":     clase,
             "items_cobrados":  hab_items,
             "items_esperados": [],
-            "nota_auditoria": (
-                f"Ingreso {data['fecha_ingreso']} → egreso {data['fecha_egreso']} "
-                f"= {dias} noche(s)."
-            ) if dias is not None else None,
+            "nota_auditoria": nota_hab_base,
         })
 
     # Bomba de infusión (existente)
