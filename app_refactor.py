@@ -20,6 +20,7 @@ from core.document_classifier import (
     detectar_tipo_documento,
     canonical_depto,
 )
+from core.parsers.estado_cuenta import extraer_todos_items
 
 st.set_page_config(page_title="Auditor Hospitalario", layout="wide", page_icon="🏥")
 
