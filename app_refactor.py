@@ -12,6 +12,7 @@ from datetime import datetime
 
 from core.config_codigos import *
 from core.utils import normalizar, compact, h, a_float
+from core.pdf_reader import extraer_texto_pdf
 
 st.set_page_config(page_title="Auditor Hospitalario", layout="wide", page_icon="🏥")
 
