@@ -13,6 +13,9 @@ from email.mime.text import MIMEText
 from datetime import datetime
 from collections import defaultdict
 
+from core.config_codigos import *
+from core.utils import normalizar, compact, h, a_float
+
 st.set_page_config(page_title="Auditor Hospitalario", layout="wide", page_icon="🏥")
 
 # Versión corregida con base en observaciones de auditoría:
