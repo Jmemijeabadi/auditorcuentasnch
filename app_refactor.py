@@ -75,20 +75,6 @@ st.markdown("""
 # =========================================================
 # EXTRACCIÓN DE PDF
 # =========================================================
-def extraer_texto_pdf(archivo_pdf) -> str:
-    archivo_pdf.seek(0)
-    partes = []
-    try:
-        with pdfplumber.open(archivo_pdf) as pdf:
-            for i, pag in enumerate(pdf.pages, 1):
-                t = pag.extract_text()
-                if t:
-                    partes.append(t)
-                else:
-                    st.warning(f"⚠️ '{getattr(archivo_pdf,'name','?')}' pág {i} sin texto.")
-    except Exception as e:
-        st.error(f"❌ Error leyendo '{getattr(archivo_pdf,'name','?')}': {e}")
-    return "\n".join(partes)
 
 def extraer_cuenta(texto: str) -> str:
     m = re.search(r"\bNC\d{5,}\b", texto, re.IGNORECASE)
