@@ -4,13 +4,11 @@ import pandas as pd
 import re
 import smtplib
 import hashlib
-import traceback
 import logging
 
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from datetime import datetime
-from collections import defaultdict
 
 from core.config_codigos import *
 from core.utils import normalizar, compact, h, a_float
@@ -75,107 +73,8 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # =========================================================
-# CONSTANTES
+# EXTRACCIÓN DE PDF
 # =========================================================
-CODIGOS_OXIGENO = {"APR-0000003"}
-
-# Códigos QRF para sala de quirófano
-CODIGO_SALA_NORMAL    = "QRF-0000002"   # primera hora
-CODIGO_SALA_ADICIONAL = "QRF-0000001"   # horas adicionales
-
-# Sevoflurano
-CODIGO_SEVOFLURANO = "FAR-0000069"
-
-# ── PUNTO 2: Máquina de anestesia ─────────────────────────
-# No existe un código de cargo específico identificado aún;
-# se audita verificando si el servicio está marcado y el tipo de seguro.
-
-# ── PUNTO 8: Accesorios de electrocauterio ────────────────
-CODIGO_ELECTROCAUTERIO = "IBM-0000032"
-CODIGO_LAPIZ_ELECTRO   = "ALM-0001320"
-CODIGO_PLACA_ELECTRO   = "ALM-0000753"
-
-# ── PUNTO 9: Accesorio de bomba de infusión ───────────────
-CODIGO_BOMBA           = "IBM-0000001"
-CODIGO_EQUIPO_INFUSOMAT = "ALM-0000869"
-
-# ── PUNTO 10: Microscopio y funda ─────────────────────────
-CODIGO_MICROSCOPIO       = "IBM-0000034"
-CODIGO_FUNDA_MICROSCOPIO = "ALM-0000878"
-
-# ── PUNTO 11: Arco en C y funda ───────────────────────────
-CODIGO_ARCO_C       = "IBM-0000023"
-CODIGO_FUNDA_ARCO_C = "ALM-0000877"
-
-# ── PUNTO 6: RPBI ─────────────────────────────────────────
-CODIGO_RPBI = "ENF-0000003"
-DIAS_RPBI_ADICIONAL = 7
-
-# Sangre / hemoderivados — palabras clave en descripción
-PALABRAS_SANGRE = {
-    "paquete globular","plasma fresco","plaquetas","sangre total",
-    "concentrado eritrocitario","hemoderivado","eritrocito",
-    "globulos rojos","crioprecipitado",
-}
-
-# Patología — palabras clave en descripción
-PALABRAS_PATOLOGIA = {
-    "patologia","histopatolog","biopsia","estudio histol",
-}
-
-# Habitación — incluye STANDARD y AMBULATORIA
-CODIGOS_HABITACION = {"HOS-0000001", "HOS-0000003"}
-
-# Servicios binarios: (key, label, patron_en_servicios, codigos_en_cuenta, area_cuenta)
-SERVICIOS_BINARIOS_DEF = [
-    ("electrocauterio", "Electrocauterio",
-     r"\bx\s+electrocauterio",
-     {"IBM-0000032"}, "quirofano"),
-    ("aspirador", "Torre de aspiración",
-     r"\bx\s+torre de aspiracion",
-     {"IBM-0000008"}, "quirofano"),
-    ("monitor_qx", "Monitor QX",
-     r"\bx\s+monitor sv\s*qx",
-     {"IBM-0000035"}, "quirofano"),
-    ("sala_rec", "Sala de recuperación",
-     r"\bx\s+sala de recuperacion\b",
-     {"REC-0000001"}, "recuperacion"),
-    ("monitor_rec", "Monitor SV recuperación",
-     r"\bx\s+monitor sv recuperacion",
-     {"IBM-0000010"}, "recuperacion"),
-    # ── PUNTO 10: Microscopio ─────────────────────────────
-    ("microscopio", "Microscopio-TIVATO",
-     r"\bx\s+microscopio",
-     {"IBM-0000034"}, "quirofano"),
-    # ── PUNTO 11: Arco en C ──────────────────────────────
-    ("arco_c", "Arco en C",
-     r"\bx\s+arco en c",
-     {"IBM-0000023"}, "quirofano"),
-]
-
-# =========================================================
-# UTILIDADES
-# =========================================================
-def normalizar(texto: str) -> str:
-    texto = texto.lower()
-    texto = "".join(c for c in unicodedata.normalize("NFD", texto)
-                    if unicodedata.category(c) != "Mn")
-    texto = re.sub(r"[ \t]+", " ", texto)
-    return texto
-
-def compact(texto: str) -> str:
-    return re.sub(r"\s+", " ", texto).strip()
-
-def h(valor) -> str:
-    """Escapa texto para render HTML seguro en Streamlit/reportes."""
-    return escape(str(valor or ""), quote=True)
-
-def a_float(valor) -> float:
-    try:
-        return float(str(valor).replace(",", "").strip())
-    except Exception:
-        return 0.0
-
 def extraer_texto_pdf(archivo_pdf) -> str:
     archivo_pdf.seek(0)
     partes = []
@@ -2460,4 +2359,3 @@ with col2:
             file_name="auditoria_items.csv",
             mime="text/csv",
         )
-
