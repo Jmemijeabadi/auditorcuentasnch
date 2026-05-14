@@ -1,5 +1,3 @@
-# core/config_codigos.py
-
 CODIGOS_OXIGENO = {"APR-0000003"}
 
 CODIGO_SALA_NORMAL = "QRF-0000002"
