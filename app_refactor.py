@@ -10,17 +10,7 @@ from datetime import datetime
 
 from core.config_codigos import *
 from core.utils import normalizar, h
-from core.pdf_reader import extraer_texto_pdf
-from core.document_classifier import (
-    extraer_cuenta,
-    extraer_paciente,
-    extraer_fechas_estancia,
-    extraer_tipo_seguro,
-    detectar_tipo_documento,
-)
-from core.parsers.estado_cuenta import extraer_todos_items
-from core.parsers.servicios_cirugia import extraer_servicios_cirugia
-from core.parsers.nota_postqx import extraer_nota_postqx
+from core.consolidation import consolidar_por_cuenta_core
 
 st.set_page_config(page_title="Auditor Hospitalario", layout="wide", page_icon="🏥")
 
@@ -83,141 +73,11 @@ st.markdown("""
 
 
 # =========================================================
-# PLANTILLA DE CUENTA
-# =========================================================
-def plantilla_cuenta():
-    return {
-        "paciente":       None,
-        "archivos":       [],
-        "fecha_ingreso":  None,
-        "fecha_egreso":   None,
-        "dias_estancia":  None,
-        "seguro":         None,           # Punto 2
-        "todos_los_items":    [],
-        "servicios_cirugia":  None,
-        "nota_postqx":        None,
-        "num_cirugias":       0,          # Fix 7: contador de cirugías
-        "cirugias_detalle":   [],         # Fix 7: lista de {archivo, hora_total, ingreso, egreso}
-    }
-
-# =========================================================
 # CONSOLIDACIÓN
 # =========================================================
 @st.cache_data(show_spinner=False)
-def consolidar_por_cuenta(archivos_bytes: list) -> dict:
-    import io
-    cuentas = {}
-
-    for nombre, contenido in archivos_bytes:
-        af = io.BytesIO(contenido)
-        af.name = nombre
-        texto = extraer_texto_pdf(af)
-        if not texto:
-            st.warning(f"⚠️ '{nombre}' sin texto; se omite.")
-            continue
-
-        cuenta  = extraer_cuenta(texto)
-        paciente = extraer_paciente(texto)
-        tipo    = detectar_tipo_documento(texto)
-
-        if cuenta == "SIN_CUENTA":
-            st.warning(f"⚠️ Sin NCxxxxx en '{nombre}'.")
-        if tipo == "otro":
-            st.info(f"ℹ️ '{nombre}' tipo no reconocido.")
-
-        if cuenta not in cuentas:
-            cuentas[cuenta] = plantilla_cuenta()
-
-        if cuentas[cuenta]["paciente"] in (None, "No identificado") and paciente != "No identificado":
-            cuentas[cuenta]["paciente"] = paciente
-
-        cuentas[cuenta]["archivos"].append({"archivo": nombre, "tipo_documento": tipo})
-
-        if tipo.startswith("estado_cuenta"):
-            items = extraer_todos_items(texto, nombre, tipo, cuenta)
-            # ── Deduplicar ítems entre cortes (EXTRAS vs PACIENTE) ──
-            # La llave anterior (código, cantidad, fecha, folio) podía eliminar
-            # cargos legítimos repetidos. Se usa una llave más específica.
-            def _item_key(i):
-                return (
-                    i.get("area", ""),
-                    i.get("codigo", ""),
-                    normalizar(i.get("descripcion", "")),
-                    round(i.get("cantidad", 0), 3),
-                    round(i.get("precio_unitario", 0), 2),
-                    round(i.get("subtotal", 0), 2),
-                    i.get("fecha", ""),
-                    i.get("folio", ""),
-                )
-
-            existentes = {_item_key(i) for i in cuentas[cuenta]["todos_los_items"]}
-            items_nuevos = [i for i in items if _item_key(i) not in existentes]
-            cuentas[cuenta]["todos_los_items"].extend(items_nuevos)
-            if cuentas[cuenta]["fecha_ingreso"] is None:
-                fi, fe, ds = extraer_fechas_estancia(texto)
-                if fi:
-                    cuentas[cuenta]["fecha_ingreso"] = fi
-                    cuentas[cuenta]["fecha_egreso"]  = fe
-                    cuentas[cuenta]["dias_estancia"] = ds
-            # Extraer seguro del estado de cuenta
-            if cuentas[cuenta]["seguro"] is None:
-                seg = extraer_tipo_seguro(texto)
-                if seg != "desconocido":
-                    cuentas[cuenta]["seguro"] = seg
-
-        elif tipo == "servicios_cirugia":
-            # Fix 7: Registrar cada cirugía individual
-            sc_nuevo = extraer_servicios_cirugia(texto)
-            cuentas[cuenta]["num_cirugias"] += 1
-            cuentas[cuenta]["cirugias_detalle"].append({
-                "archivo":    nombre,
-                "hora_total": sc_nuevo.get("hora_total_qx"),
-                "ingreso":    sc_nuevo.get("ingreso_sala"),
-                "egreso":     sc_nuevo.get("egreso_sala"),
-                "cirugia_num": cuentas[cuenta]["num_cirugias"],
-            })
-
-            if cuentas[cuenta]["servicios_cirugia"] is None:
-                cuentas[cuenta]["servicios_cirugia"] = sc_nuevo
-            else:
-                sc = cuentas[cuenta]["servicios_cirugia"]
-                for k in ("oxigeno_qx", "oxigeno_rec", "sala_hrs_normal", "sala_hrs_adicional"):
-                    sc[k] += sc_nuevo[k]
-                sc["evidencias_oxigeno"].extend(sc_nuevo["evidencias_oxigeno"])
-                if sc["hora_total_qx"] is None:
-                    sc["hora_total_qx"] = sc_nuevo["hora_total_qx"]
-                if sc["sevoflurano_ml"] is None:
-                    sc["sevoflurano_ml"] = sc_nuevo["sevoflurano_ml"]
-                # Conservar nuevos campos si no los teníamos
-                if sc["ingreso_sala"] is None:
-                    sc["ingreso_sala"] = sc_nuevo["ingreso_sala"]
-                    sc["egreso_sala"]  = sc_nuevo["egreso_sala"]
-                    sc["horas_calculadas_m21"] = sc_nuevo["horas_calculadas_m21"]
-                    sc["minutos_totales"]      = sc_nuevo["minutos_totales"]
-                if sc["seguro"] is None:
-                    sc["seguro"] = sc_nuevo["seguro"]
-                if not sc["maquina_anestesia"]:
-                    sc["maquina_anestesia"] = sc_nuevo["maquina_anestesia"]
-                if sc["arco_c_hrs"] is None:
-                    sc["arco_c_hrs"] = sc_nuevo["arco_c_hrs"]
-                if not sc["microscopio"]:
-                    sc["microscopio"] = sc_nuevo["microscopio"]
-                # ── Acumular servicios binarios marcados (OR lógico) ──
-                if "servicios_marcados" in sc and "servicios_marcados" in sc_nuevo:
-                    for k_bin in sc_nuevo["servicios_marcados"]:
-                        if sc_nuevo["servicios_marcados"][k_bin]:
-                            sc["servicios_marcados"][k_bin] = True
-
-            # Actualizar seguro desde servicios (tiene prioridad sobre estado de cuenta)
-            sc_actual = cuentas[cuenta]["servicios_cirugia"]
-            if sc_actual.get("seguro"):
-                cuentas[cuenta]["seguro"] = sc_actual["seguro"]
-
-        elif tipo == "nota_postquirurgica":
-            if cuentas[cuenta]["nota_postqx"] is None:
-                cuentas[cuenta]["nota_postqx"] = extraer_nota_postqx(texto)
-
-    return cuentas
+def consolidar_por_cuenta(archivos_bytes: list):
+    return consolidar_por_cuenta_core(archivos_bytes)
 
 # =========================================================
 # CONSTRUCCIÓN DE AUDITORÍAS
@@ -1718,7 +1578,13 @@ if not archivos_subidos:
 archivos_bytes = [(f.name, f.read()) for f in archivos_subidos]
 
 with st.spinner("Analizando documentos…"):
-    cuentas = consolidar_por_cuenta(archivos_bytes)
+    cuentas, avisos_consolidacion = consolidar_por_cuenta(archivos_bytes)
+
+for aviso in avisos_consolidacion:
+    if aviso["tipo"] == "warning":
+        st.warning(aviso["mensaje"])
+    elif aviso["tipo"] == "info":
+        st.info(aviso["mensaje"])
 
 # =========================================================
 # MÉTRICAS GLOBALES
