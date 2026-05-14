@@ -2,12 +2,11 @@ import streamlit as st
 import pdfplumber
 import pandas as pd
 import re
-import unicodedata
 import smtplib
 import hashlib
 import traceback
 import logging
-from html import escape
+
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from datetime import datetime
