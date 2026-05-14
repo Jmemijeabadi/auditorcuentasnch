@@ -12,6 +12,14 @@ from datetime import datetime
 from core.config_codigos import *
 from core.utils import normalizar, compact, h, a_float
 from core.pdf_reader import extraer_texto_pdf
+from core.document_classifier import (
+    extraer_cuenta,
+    extraer_paciente,
+    extraer_fechas_estancia,
+    extraer_tipo_seguro,
+    detectar_tipo_documento,
+    canonical_depto,
+)
 
 st.set_page_config(page_title="Auditor Hospitalario", layout="wide", page_icon="🏥")
 
