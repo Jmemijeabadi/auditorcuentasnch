@@ -1,4 +1,5 @@
 import streamlit as st
+import pdfplumber
 import pandas as pd
 import re
 import smtplib
@@ -11,15 +12,6 @@ from datetime import datetime
 
 from core.config_codigos import *
 from core.utils import normalizar, compact, h, a_float
-from core.pdf_reader import extraer_texto_pdf
-from core.document_classifier import (
-    extraer_cuenta,
-    extraer_paciente,
-    extraer_fechas_estancia,
-    extraer_tipo_seguro,
-    detectar_tipo_documento,
-)
-from core.parsers.estado_cuenta import extraer_todos_items
 
 st.set_page_config(page_title="Auditor Hospitalario", layout="wide", page_icon="🏥")
 
@@ -80,6 +72,113 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# =========================================================
+# EXTRACCIÓN DE PDF
+# =========================================================
+def extraer_texto_pdf(archivo_pdf) -> str:
+    archivo_pdf.seek(0)
+    partes = []
+    try:
+        with pdfplumber.open(archivo_pdf) as pdf:
+            for i, pag in enumerate(pdf.pages, 1):
+                t = pag.extract_text()
+                if t:
+                    partes.append(t)
+                else:
+                    st.warning(f"⚠️ '{getattr(archivo_pdf,'name','?')}' pág {i} sin texto.")
+    except Exception as e:
+        st.error(f"❌ Error leyendo '{getattr(archivo_pdf,'name','?')}': {e}")
+    return "\n".join(partes)
+
+def extraer_cuenta(texto: str) -> str:
+    m = re.search(r"\bNC\d{5,}\b", texto, re.IGNORECASE)
+    if m:
+        return m.group(0).upper()
+    m = re.search(r"Cuenta[:\s]+(NC\d+)", texto, re.IGNORECASE)
+    if m:
+        return m.group(1).upper()
+    return "SIN_CUENTA"
+
+def extraer_paciente(texto: str) -> str:
+    nombre_crudo = None
+    m = re.search(
+        r"Nombre Paciente\s+Fecha nacimiento:.*?\n(.+?)\n(?:Medico|Médico)",
+        texto, re.IGNORECASE | re.DOTALL)
+    if m:
+        nombre_crudo = compact(m.group(1))
+    if not nombre_crudo:
+        m = re.search(r"Nombre:\s*(.+?)\s*Fecha de nacimiento:",
+                      texto, re.IGNORECASE | re.DOTALL)
+        if m:
+            nombre_crudo = compact(m.group(1))
+    if not nombre_crudo:
+        return "No identificado"
+    nombre_limpio = re.split(r"\s+\d{2,4}[-/]\d{2}[-/]\d{2,4}", nombre_crudo)[0]
+    nombre_limpio = re.sub(r"\s+\d+\s+AÑO[S]?.*$", "", nombre_limpio, flags=re.IGNORECASE)
+    return compact(nombre_limpio).title()
+
+def extraer_fechas_estancia(texto: str):
+    m = re.search(
+        r"(\d{2}-\d{2}-\d{4})\s+\d{2}:\d{2}:\d{2}\s+(\d{2}-\d{2}-\d{4})\s+\d{2}:\d{2}:\d{2}",
+        texto)
+    if m:
+        try:
+            fmt = "%d-%m-%Y"
+            ing = datetime.strptime(m.group(1), fmt)
+            egr = datetime.strptime(m.group(2), fmt)
+            dias = (egr - ing).days
+            return m.group(1), m.group(2), dias
+        except Exception:
+            pass
+    return None, None, None
+
+def extraer_tipo_seguro(texto: str) -> str:
+    """Extrae el tipo de seguro del estado de cuenta o servicios."""
+    # Buscar en múltiples líneas (no compact) para mejor precisión
+    for linea in texto.splitlines():
+        n = normalizar(linea.strip())
+        # Desde servicios de cirugía: "Seguro: PARTICULAR NACIONAL"
+        m = re.match(r"seguro:\s*(.+)", n)
+        if m:
+            seg = m.group(1).strip()
+            if "particular" in seg:
+                return "particular"
+            return seg
+    # Desde estado de cuenta: buscar línea después de "Cia. Cliente"
+    lineas = texto.splitlines()
+    for i, linea in enumerate(lineas):
+        if re.search(r"Cia\.?\s*Cliente", linea, re.IGNORECASE):
+            # El valor puede estar en la misma línea o en la siguiente
+            resto = re.sub(r".*Cia\.?\s*Cliente\s*", "", linea, flags=re.IGNORECASE).strip()
+            if not resto and i + 1 < len(lineas):
+                resto = lineas[i + 1].strip()
+            if resto:
+                n = normalizar(resto)
+                if "particular" in n:
+                    return "particular"
+                return resto.strip()[:60]
+    return "desconocido"
+
+def detectar_tipo_documento(texto: str) -> str:
+    t = normalizar(texto)
+    if "servicios de cirugia" in t:
+        return "servicios_cirugia"
+    if "nota post-quirurgica" in t or "nota postquirurgica" in t:
+        return "nota_postquirurgica"
+    if "estado de cuenta" in t:
+        corte = re.search(r"estado de cuenta corte a:\s*([a-z]+)", t)
+        if corte:
+            return f"estado_cuenta_{corte.group(1).upper()}"
+        return "estado_cuenta"
+    return "otro"
+
+def canonical_depto(nombre: str) -> str:
+    n = normalizar(nombre)
+    if "quirofano" in n:     return "quirofano"
+    if "recuperacion" in n:  return "recuperacion"
+    if "hospitalizacion" in n: return "hospitalizacion"
+    if "caja" in n:           return "caja"
+    return "otro"
 
 # =========================================================
 # PUNTO 1 y 7: Cálculo de horas con regla del minuto 21
@@ -113,6 +212,79 @@ def calcular_horas_minuto21(ingreso_str: str, egreso_str: str):
         horas_completas += 1
     horas_calculadas = max(horas_completas, 1)  # mínimo 1 hora
     return horas_calculadas, diff_min
+
+# =========================================================
+# REGEX ÍTEMS
+# =========================================================
+ITEM_RE = re.compile(
+    r"^(?P<codigo>[A-Z0-9-]+)\s+"
+    r"(?P<descripcion>.*?)\s+"
+    r"(?P<cantidad>\d+\.\d{3})\s+"
+    r"(?P<precio>[\d,]+\.\d{2})\s+"
+    r"(?P<descto>[\d,]+\.\d{2})\s+"
+    r"(?P<subtotal>[\d,]+\.\d{2})\s+"
+    r"(?P<impuesto>[\d,]+\.\d{2})\s+"
+    r"(?P<total>[\d,]+\.\d{2})"
+    r"(?:\s+(?P<fecha_folio>\S+))?"
+    r"(?:\s+(?P<folio2>\S+))?"
+    r"(?:\s+(?P<factura>\S+))?$",   # NCTA-XXXX y similares (campo Factura)
+    re.IGNORECASE,
+)
+
+def _parsear_ff(ff_raw, f2_raw):
+    if not ff_raw:
+        return "", ""
+    if re.match(r"^\d{2}-\d{2}-\d{4}$", ff_raw):
+        return ff_raw, f2_raw or ""
+    if len(ff_raw) > 10 and re.match(r"\d{2}-\d{2}-\d{4}", ff_raw):
+        return ff_raw[:10], ff_raw[10:]
+    return "", ff_raw
+
+def _bloque_departamentos(texto: str):
+    patron = re.compile(r"(?im)^Departamento:\s*(.*)$")
+    matches = list(patron.finditer(texto))
+    bloques = []
+    for i, m in enumerate(matches):
+        inicio = m.end()
+        fin = matches[i+1].start() if i+1 < len(matches) else len(texto)
+        bloques.append({
+            "encabezado": m.group(1).strip(),
+            "departamento": canonical_depto(m.group(1)),
+            "contenido": texto[inicio:fin],
+        })
+    return bloques
+
+# =========================================================
+# EXTRACCIÓN COMPLETA DEL ESTADO DE CUENTA
+# =========================================================
+def extraer_todos_items(texto: str, nombre_archivo: str, tipo_doc: str, cuenta: str) -> list:
+    items = []
+    for bloque in _bloque_departamentos(texto):
+        if bloque["departamento"] == "caja":
+            continue
+        for linea in bloque["contenido"].splitlines():
+            lc = compact(linea)
+            if not lc:
+                continue
+            m = ITEM_RE.match(lc)
+            if not m:
+                continue
+            fecha, folio = _parsear_ff(m.group("fecha_folio"), m.group("folio2"))
+            items.append({
+                "cuenta":        cuenta,
+                "archivo":       nombre_archivo,
+                "tipo_documento": tipo_doc,
+                "area":          bloque["departamento"],
+                "codigo":        m.group("codigo"),
+                "descripcion":   m.group("descripcion"),
+                "cantidad":      a_float(m.group("cantidad")),
+                "precio_unitario": a_float(m.group("precio")),
+                "subtotal":      a_float(m.group("subtotal")),
+                "fecha":         fecha,
+                "folio":         folio,
+                "linea_original": lc,
+            })
+    return items
 
 # =========================================================
 # EXTRACCIÓN DE SERVICIOS DE CIRUGÍA (ampliada)
