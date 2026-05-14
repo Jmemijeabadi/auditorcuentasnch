@@ -18,7 +18,6 @@ from core.document_classifier import (
     extraer_fechas_estancia,
     extraer_tipo_seguro,
     detectar_tipo_documento,
-    canonical_depto,
 )
 from core.parsers.estado_cuenta import extraer_todos_items
 
@@ -114,79 +113,6 @@ def calcular_horas_minuto21(ingreso_str: str, egreso_str: str):
         horas_completas += 1
     horas_calculadas = max(horas_completas, 1)  # mínimo 1 hora
     return horas_calculadas, diff_min
-
-# =========================================================
-# REGEX ÍTEMS
-# =========================================================
-ITEM_RE = re.compile(
-    r"^(?P<codigo>[A-Z0-9-]+)\s+"
-    r"(?P<descripcion>.*?)\s+"
-    r"(?P<cantidad>\d+\.\d{3})\s+"
-    r"(?P<precio>[\d,]+\.\d{2})\s+"
-    r"(?P<descto>[\d,]+\.\d{2})\s+"
-    r"(?P<subtotal>[\d,]+\.\d{2})\s+"
-    r"(?P<impuesto>[\d,]+\.\d{2})\s+"
-    r"(?P<total>[\d,]+\.\d{2})"
-    r"(?:\s+(?P<fecha_folio>\S+))?"
-    r"(?:\s+(?P<folio2>\S+))?"
-    r"(?:\s+(?P<factura>\S+))?$",   # NCTA-XXXX y similares (campo Factura)
-    re.IGNORECASE,
-)
-
-def _parsear_ff(ff_raw, f2_raw):
-    if not ff_raw:
-        return "", ""
-    if re.match(r"^\d{2}-\d{2}-\d{4}$", ff_raw):
-        return ff_raw, f2_raw or ""
-    if len(ff_raw) > 10 and re.match(r"\d{2}-\d{2}-\d{4}", ff_raw):
-        return ff_raw[:10], ff_raw[10:]
-    return "", ff_raw
-
-def _bloque_departamentos(texto: str):
-    patron = re.compile(r"(?im)^Departamento:\s*(.*)$")
-    matches = list(patron.finditer(texto))
-    bloques = []
-    for i, m in enumerate(matches):
-        inicio = m.end()
-        fin = matches[i+1].start() if i+1 < len(matches) else len(texto)
-        bloques.append({
-            "encabezado": m.group(1).strip(),
-            "departamento": canonical_depto(m.group(1)),
-            "contenido": texto[inicio:fin],
-        })
-    return bloques
-
-# =========================================================
-# EXTRACCIÓN COMPLETA DEL ESTADO DE CUENTA
-# =========================================================
-def extraer_todos_items(texto: str, nombre_archivo: str, tipo_doc: str, cuenta: str) -> list:
-    items = []
-    for bloque in _bloque_departamentos(texto):
-        if bloque["departamento"] == "caja":
-            continue
-        for linea in bloque["contenido"].splitlines():
-            lc = compact(linea)
-            if not lc:
-                continue
-            m = ITEM_RE.match(lc)
-            if not m:
-                continue
-            fecha, folio = _parsear_ff(m.group("fecha_folio"), m.group("folio2"))
-            items.append({
-                "cuenta":        cuenta,
-                "archivo":       nombre_archivo,
-                "tipo_documento": tipo_doc,
-                "area":          bloque["departamento"],
-                "codigo":        m.group("codigo"),
-                "descripcion":   m.group("descripcion"),
-                "cantidad":      a_float(m.group("cantidad")),
-                "precio_unitario": a_float(m.group("precio")),
-                "subtotal":      a_float(m.group("subtotal")),
-                "fecha":         fecha,
-                "folio":         folio,
-                "linea_original": lc,
-            })
-    return items
 
 # =========================================================
 # EXTRACCIÓN DE SERVICIOS DE CIRUGÍA (ampliada)
