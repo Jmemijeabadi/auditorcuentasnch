@@ -245,12 +245,14 @@ def identificar_aseguradora_nch(texto: str):
 
 def clasificar_pagador_nch(texto: str) -> str:
     """
-    Clasificación operativa:
+    Clasificación operativa para mostrar y auditar:
     - Si contiene PARTICULAR => particular.
-    - Si coincide con catálogo NCH => nombre de aseguradora.
-    - Si no coincide con catálogo NCH => particular/no aplica regla de seguro.
+    - Si coincide con catálogo NCH => nombre canónico de aseguradora.
+    - Si no coincide con catálogo NCH => conserva el texto del pagador,
+      pero NO activa reglas de seguro.
 
-    Esto evita que cualquier texto desconocido se trate como seguro.
+    Esto evita que cualquier texto desconocido se trate como seguro,
+    sin ocultar casos como CONVENIO - MÉDICOS en la tarjeta/reporte.
     """
     n = normalizar_pagador(texto)
 
@@ -264,8 +266,9 @@ def clasificar_pagador_nch(texto: str) -> str:
     if aseguradora:
         return aseguradora
 
-    # Por feedback de auditoría, solo el catálogo NCH aplica como seguro.
-    return "particular"
+    # No es aseguradora NCH. Se conserva el pagador para visibilidad,
+    # pero es_seguro_nch() seguirá regresando False.
+    return compact(str(texto or "")).strip()[:80] or "desconocido"
 
 def es_seguro_nch(valor: str) -> bool:
     """True solo si el valor coincide con una aseguradora del catálogo NCH."""
