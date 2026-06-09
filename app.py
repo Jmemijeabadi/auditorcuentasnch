@@ -25,6 +25,9 @@ st.set_page_config(page_title="Auditor Hospitalario", layout="wide", page_icon="
 # - Hemotransfusión con SÍ en nota queda como verificación médica, no diferencia financiera automática.
 # - Bomba de infusión vs equipo infusomat se valida por cantidades, no solo por existencia.
 # - Mejor redacción para máquina de anestesia en particulares vs convenio/seguro.
+# - Catálogo NCH de aseguradoras para no clasificar como seguro textos desconocidos.
+# - Máquina de anestesia solo aplica cuando el pagador coincide con aseguradora NCH.
+# - RPBI diferenciado: particulares con cargo inicial + adicional cada 7 días; seguros NCH con cargo diario.
 
 # =========================================================
 # CSS GLOBAL
@@ -109,6 +112,53 @@ CODIGO_FUNDA_ARCO_C = "ALM-0000877"
 CODIGO_RPBI = "ENF-0000003"
 DIAS_RPBI_ADICIONAL = 7
 
+# ── Catálogo NCH de aseguradoras ─────────────────────────
+# Regla operativa:
+# - Solo estos pagadores se consideran seguro para reglas diferenciadas.
+# - Todo texto no reconocido se clasifica como particular/no aseguradora NCH.
+ASEGURADORAS_NCH = {
+    "GNP",
+    "ATLAS",
+    "ALLIANZ",
+    "AXA",
+    "BX+",
+    "BUPA GLOBAL",
+    "GEOBLUE",
+    "GLOBAL REACH",
+    "KAISER",
+    "MONTERREY",
+    "METLIFE",
+    "MMS",
+    "MAWDY",
+    "MEXICO ASISTENCIA",
+    "MONTE DE PIEDAD",
+    "OMA",
+    "PAN-AMERICAN",
+    "PREVEM",
+    "REDGRIDGE",
+    "SURA",
+    "SOFIA",
+    "ZURICH",
+}
+
+# Aliases opcionales para hacer más robusta la detección si el PDF extrae
+# variantes, acentos, guiones o nombres comerciales incompletos.
+ASEGURADORAS_NCH_ALIASES = {
+    "BUPA": "BUPA GLOBAL",
+    "BUPA GLOBAL": "BUPA GLOBAL",
+    "GEO BLUE": "GEOBLUE",
+    "GEOBLUE": "GEOBLUE",
+    "GLOBAL REACH": "GLOBAL REACH",
+    "MEXICO ASISTENCIA": "MEXICO ASISTENCIA",
+    "MÉXICO ASISTENCIA": "MEXICO ASISTENCIA",
+    "MONTE DE PIEDAD": "MONTE DE PIEDAD",
+    "PAN AMERICAN": "PAN-AMERICAN",
+    "PAN-AMERICAN": "PAN-AMERICAN",
+    "RED BRIDGE": "REDGRIDGE",
+    "REDBRIDGE": "REDGRIDGE",
+    "REDGRIDGE": "REDGRIDGE",
+}
+
 # Sangre / hemoderivados — palabras clave en descripción
 PALABRAS_SANGRE = {
     "paquete globular","plasma fresco","plaquetas","sangre total",
@@ -163,6 +213,63 @@ def normalizar(texto: str) -> str:
 
 def compact(texto: str) -> str:
     return re.sub(r"\s+", " ", texto).strip()
+
+def normalizar_pagador(texto: str) -> str:
+    """Normaliza nombres de pagador/aseguradora para comparación robusta."""
+    t = normalizar(texto or "")
+    t = re.sub(r"[^a-z0-9]+", " ", t)
+    return compact(t)
+
+def identificar_aseguradora_nch(texto: str):
+    """
+    Devuelve el nombre canónico de la aseguradora si el texto contiene
+    una aseguradora del catálogo NCH. Si no, devuelve None.
+    """
+    n = normalizar_pagador(texto)
+    if not n:
+        return None
+
+    # Primero revisar alias para capturar variantes comunes del PDF.
+    for alias, canonico in ASEGURADORAS_NCH_ALIASES.items():
+        a = normalizar_pagador(alias)
+        if re.search(rf"(^|\s){re.escape(a)}($|\s)", n):
+            return canonico
+
+    # Después revisar catálogo oficial.
+    for aseguradora in ASEGURADORAS_NCH:
+        a = normalizar_pagador(aseguradora)
+        if re.search(rf"(^|\s){re.escape(a)}($|\s)", n):
+            return aseguradora
+
+    return None
+
+def clasificar_pagador_nch(texto: str) -> str:
+    """
+    Clasificación operativa:
+    - Si contiene PARTICULAR => particular.
+    - Si coincide con catálogo NCH => nombre de aseguradora.
+    - Si no coincide con catálogo NCH => particular/no aplica regla de seguro.
+
+    Esto evita que cualquier texto desconocido se trate como seguro.
+    """
+    n = normalizar_pagador(texto)
+
+    if not n:
+        return "desconocido"
+
+    if "particular" in n:
+        return "particular"
+
+    aseguradora = identificar_aseguradora_nch(texto)
+    if aseguradora:
+        return aseguradora
+
+    # Por feedback de auditoría, solo el catálogo NCH aplica como seguro.
+    return "particular"
+
+def es_seguro_nch(valor: str) -> bool:
+    """True solo si el valor coincide con una aseguradora del catálogo NCH."""
+    return identificar_aseguradora_nch(valor) is not None
 
 def h(valor) -> str:
     """Escapa texto para render HTML seguro en Streamlit/reportes."""
@@ -232,30 +339,38 @@ def extraer_fechas_estancia(texto: str):
     return None, None, None
 
 def extraer_tipo_seguro(texto: str) -> str:
-    """Extrae el tipo de seguro del estado de cuenta o servicios."""
-    # Buscar en múltiples líneas (no compact) para mejor precisión
+    """Extrae y clasifica el pagador como particular o aseguradora NCH."""
+    candidatos = []
+
+    # Desde servicios de cirugía: "Seguro: PARTICULAR NACIONAL" o aseguradora.
     for linea in texto.splitlines():
         n = normalizar(linea.strip())
-        # Desde servicios de cirugía: "Seguro: PARTICULAR NACIONAL"
         m = re.match(r"seguro:\s*(.+)", n)
         if m:
-            seg = m.group(1).strip()
-            if "particular" in seg:
-                return "particular"
-            return seg
-    # Desde estado de cuenta: buscar línea después de "Cia. Cliente"
+            candidatos.append(m.group(1).strip())
+
+    # Desde estado de cuenta: buscar línea después de "Cia. Cliente".
     lineas = texto.splitlines()
     for i, linea in enumerate(lineas):
         if re.search(r"Cia\.?\s*Cliente", linea, re.IGNORECASE):
-            # El valor puede estar en la misma línea o en la siguiente
-            resto = re.sub(r".*Cia\.?\s*Cliente\s*", "", linea, flags=re.IGNORECASE).strip()
+            resto = re.sub(
+                r".*Cia\.?\s*Cliente\s*",
+                "",
+                linea,
+                flags=re.IGNORECASE
+            ).strip()
+
             if not resto and i + 1 < len(lineas):
                 resto = lineas[i + 1].strip()
+
             if resto:
-                n = normalizar(resto)
-                if "particular" in n:
-                    return "particular"
-                return resto.strip()[:60]
+                candidatos.append(resto)
+
+    for candidato in candidatos:
+        clasificado = clasificar_pagador_nch(candidato)
+        if clasificado != "desconocido":
+            return clasificado
+
     return "desconocido"
 
 def detectar_tipo_documento(texto: str) -> str:
@@ -466,7 +581,7 @@ def extraer_servicios_cirugia(texto: str) -> dict:
     m = re.search(r"seguro:\s*(.+?)(?:cirugia programada|cirugia realizada)", t_norm)
     if m:
         seg = m.group(1).strip()
-        resultado["seguro"] = "particular" if "particular" in seg else seg
+        resultado["seguro"] = clasificar_pagador_nch(seg)
 
     # ── PUNTO 2: Máquina de anestesia marcada ─────────────
     resultado["maquina_anestesia"] = bool(
@@ -831,11 +946,16 @@ def construir_auditorias(data: dict, tolerancia: float) -> list:
             })
 
     # ══════════════════════════════════════════════════════
-    # PUNTO 2: Máquina de anestesia (particular vs seguro)
+    # PUNTO 2: Máquina de anestesia
+    # Regla actualizada:
+    # - Solo aplica validación como seguro si el pagador coincide con
+    #   el catálogo NCH de aseguradoras.
+    # - Si es particular o texto no reconocido, NO se exige el cargo.
     # ══════════════════════════════════════════════════════
     if sc:
         maq_marcada = sc.get("maquina_anestesia", False)
-        es_particular = "particular" in (seguro or "")
+        es_seguro = es_seguro_nch(seguro)
+        es_particular = not es_seguro
 
         # Fix 6: Buscar cargo de máquina de anestesia en el estado de cuenta
         PALABRAS_MAQUINA = {"maquina de anestesia", "maquina anestesia", "anesthesia machine"}
@@ -845,17 +965,21 @@ def construir_auditorias(data: dict, tolerancia: float) -> list:
 
         if maq_marcada or maq_cobrada:
             if es_particular and maq_cobrada:
-                status = "ERROR — paciente PARTICULAR con cargo de máquina de anestesia"
+                status = "ERROR — máquina de anestesia cobrada en cuenta particular/no aseguradora NCH"
                 clase  = "err"
+
             elif es_particular and not maq_cobrada:
-                status = "ok — documentada en servicios, no cobrada (particular)"
+                status = "no aplica — cuenta particular/no aseguradora NCH; no se requiere cargo"
+                clase  = "gray"
+
+            elif es_seguro and maq_cobrada:
+                status = f"ok — paciente con seguro NCH ({seguro}), máquina cobrada"
                 clase  = "ok"
-            elif not es_particular and maq_cobrada:
-                status = "ok — paciente con seguro, máquina cobrada"
-                clase  = "ok"
-            elif not es_particular and maq_marcada and not maq_cobrada:
-                status = "documentada pero no cobrada — paciente con seguro, verificar"
+
+            elif es_seguro and maq_marcada and not maq_cobrada:
+                status = f"documentada pero no cobrada — paciente con seguro NCH ({seguro}), verificar"
                 clase  = "warn"
+
             else:
                 status = f"documentada: {'sí' if maq_marcada else 'no'}, cobrada: {'sí' if maq_cobrada else 'no'}"
                 clase  = "gray"
@@ -874,9 +998,10 @@ def construir_auditorias(data: dict, tolerancia: float) -> list:
                 "items_cobrados":  maq_items,
                 "items_esperados": [],
                 "nota_auditoria": (
-                    f"Seguro: {seguro or 'no identificado'}. "
-                    f"Regla: no se cobra en particulares; en convenios/seguros, "
-                    f"si está documentada y no cobrada, verificar."
+                    f"Pagador clasificado: {seguro or 'no identificado'}. "
+                    f"Regla: la validación de cargo de máquina de anestesia solo aplica "
+                    f"para aseguradoras del catálogo NCH. En particulares/no aseguradora NCH, "
+                    f"no se requiere cargo."
                 ),
             })
 
@@ -1545,47 +1670,86 @@ def construir_auditorias(data: dict, tolerancia: float) -> list:
     # ══════════════════════════════════════════════════════
 
     # ══════════════════════════════════════════════════════
-    # CAMBIO 3 — RPBI: regla actualizada con mínimo obligatorio
-    # Por indicación del auditor: en TODAS las cuentas (particulares,
-    # convenio y seguros), desde el ingreso a habitación debe existir
-    # mínimo un cargo de Disposición de RPBI. Pasando 7 días, otro cargo
-    # adicional, y así sucesivamente.
+    # RPBI: regla diferenciada por tipo de cuenta
+    # - Particular/no aseguradora NCH: 1 cargo al ingreso + adicional pasando 7 días.
+    # - Seguro NCH: cargo diario de ingreso a egreso.
     # ══════════════════════════════════════════════════════
     rpbi_items = por_codigo({CODIGO_RPBI})
     rpbi_count = len(rpbi_items)
 
-    # Calcular cantidad esperada según días de estancia
-    if dias is not None and dias > 0:
-        # 1 cargo al ingreso + 1 adicional por cada 7 días completos posteriores
-        rpbi_esperado = 1 + (max(dias - 1, 0) // DIAS_RPBI_ADICIONAL)
-    elif dias == 0:
-        # Mismo día de ingreso/egreso — al menos 1 cargo
-        rpbi_esperado = 1
-    else:
-        # Sin datos de estancia, se requiere mínimo 1
-        rpbi_esperado = 1
+    es_seguro = es_seguro_nch(seguro)
 
-    # Determinar status y clase
-    if rpbi_count == 0:
-        # Caso crítico: ninguna cuenta debería tener cero RPBI
-        status = (f"FALTA cargo de RPBI — toda cuenta debe tener mínimo 1 "
-                  f"({CODIGO_RPBI})")
-        clase  = "err"
-    elif rpbi_count < rpbi_esperado:
-        # Tiene RPBI pero menos de los esperados por días
-        status = (f"insuficiente — {rpbi_count} cargo(s) para "
-                  f"{dias if dias is not None else '?'} día(s); "
-                  f"se esperan {rpbi_esperado}")
-        clase = "err"
-    elif rpbi_count == rpbi_esperado:
-        status = (f"ok — {rpbi_count} cargo(s) para "
-                  f"{dias if dias is not None else '?'} día(s)")
-        clase = "ok"
+    if dias is None:
+        rpbi_esperado = None
+
+        if rpbi_count == 0:
+            status = (
+                f"FALTA cargo de RPBI — no hay fechas de estancia para calcular frecuencia, "
+                f"pero debe existir mínimo 1 cargo al ingreso a habitación ({CODIGO_RPBI})"
+            )
+            clase = "err"
+        else:
+            status = (
+                f"{rpbi_count} cargo(s) de RPBI detectado(s); sin fechas de estancia "
+                f"no se puede validar frecuencia"
+            )
+            clase = "gray"
+
+    elif es_seguro:
+        # Seguro NCH: cargo diario de ingreso a egreso.
+        # La variable dias viene de fecha_egreso - fecha_ingreso.
+        # Por eso se usa dias + 1 para contar días calendario incluyendo ingreso y egreso.
+        rpbi_esperado = max(dias + 1, 1)
+
+        if rpbi_count == 0:
+            status = f"FALTA cargo diario de RPBI — seguro NCH ({seguro})"
+            clase = "err"
+        elif rpbi_count < rpbi_esperado:
+            status = (
+                f"insuficiente — seguro NCH ({seguro}): {rpbi_count} cargo(s) "
+                f"para {dias} noche(s) / {rpbi_esperado} día(s) calendario; "
+                f"se esperan {rpbi_esperado}"
+            )
+            clase = "err"
+        elif rpbi_count == rpbi_esperado:
+            status = (
+                f"ok — seguro NCH ({seguro}): {rpbi_count} cargo(s) diario(s) "
+                f"de ingreso a egreso"
+            )
+            clase = "ok"
+        else:
+            status = (
+                f"verificar — seguro NCH ({seguro}): {rpbi_count} cargo(s); "
+                f"se esperaban {rpbi_esperado}"
+            )
+            clase = "warn"
+
     else:
-        # Hay más cargos de los esperados — no es error pero conviene revisar
-        status = (f"{rpbi_count} cargo(s) para {dias if dias is not None else '?'} día(s); "
-                  f"se esperaban {rpbi_esperado}")
-        clase = "warn"
+        # Particular/no aseguradora NCH:
+        # 1 cargo inicial; pasando 7 días, segundo cargo; y así sucesivamente.
+        rpbi_esperado = 1 + (max(dias - 1, 0) // DIAS_RPBI_ADICIONAL)
+
+        if rpbi_count == 0:
+            status = "FALTA cargo inicial de RPBI — cuenta particular/no aseguradora NCH"
+            clase = "err"
+        elif rpbi_count < rpbi_esperado:
+            status = (
+                f"insuficiente — cuenta particular/no aseguradora NCH: {rpbi_count} cargo(s) "
+                f"para {dias} día(s); se esperan {rpbi_esperado}"
+            )
+            clase = "err"
+        elif rpbi_count == rpbi_esperado:
+            status = (
+                f"ok — cuenta particular/no aseguradora NCH: {rpbi_count} cargo(s) "
+                f"para {dias} día(s)"
+            )
+            clase = "ok"
+        else:
+            status = (
+                f"verificar — cuenta particular/no aseguradora NCH: {rpbi_count} cargo(s) "
+                f"para {dias} día(s); se esperaban {rpbi_esperado}"
+            )
+            clase = "warn"
 
     auditorias.append({
         "categoria": "Estancia",
@@ -1594,17 +1758,18 @@ def construir_auditorias(data: dict, tolerancia: float) -> list:
         "tipo":      "numerico",
         "unidad":    "cargo(s)",
         "cobrado":   float(rpbi_count),
-        "esperado":  float(rpbi_esperado),
+        "esperado":  float(rpbi_esperado) if rpbi_esperado is not None else None,
         "status":    status,
         "diff":      None,
         "clase":     clase,
         "items_cobrados":  rpbi_items,
         "items_esperados": [],
         "nota_auditoria": (
-            f"Regla: toda cuenta (particular, convenio o seguro) debe tener mínimo "
-            f"1 cargo de RPBI al ingreso a habitación; un cargo adicional por cada "
-            f"{DIAS_RPBI_ADICIONAL} días completos posteriores. "
-            f"Estancia: {dias if dias is not None else '?'} día(s)."
+            f"Pagador clasificado: {seguro or 'no identificado'}. "
+            f"Regla RPBI: particulares/no aseguradora NCH = 1 cargo inicial y "
+            f"1 adicional pasando cada {DIAS_RPBI_ADICIONAL} días; "
+            f"seguros NCH = cargo diario de ingreso a egreso. "
+            f"Estancia calculada: {dias if dias is not None else '?'} día(s)."
         ),
     })
 
