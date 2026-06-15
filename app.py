@@ -2722,7 +2722,7 @@ def _enviar_log_email(
 
 
 # =========================================================
-# FRONTEND V3 — PRODUCTO DE AUDITORÍA OPERATIVA
+# FRONTEND V4 — PRODUCTO DE AUDITORÍA OPERATIVA
 # =========================================================
 LOGO_NCH_URL = "https://newcityhospital.com/wp-content/uploads/2023/08/logo_newcity_hospital.png"
 
@@ -2734,7 +2734,7 @@ tolerancia_ui = float(st.session_state.get("tolerancia_ui", 0.01))
 
 st.markdown("""
 <style>
-/* ================= FRONTEND V3 ================= */
+/* ================= FRONTEND V4 ================= */
 .block-container{
   max-width:1280px;
   padding-top:1.25rem;
@@ -2983,7 +2983,6 @@ def _ui_audit_trace_row(a: dict) -> dict:
     }
 
 
-@st.dialog("Configuración", width="large")
 def mostrar_configuracion():
     st.markdown("### Configuración de auditoría")
     st.markdown(
@@ -3017,7 +3016,6 @@ def mostrar_configuracion():
     )
 
 
-@st.dialog("Reglas y códigos auditados", width="large")
 def mostrar_reglas_codigos():
     st.markdown("### Códigos monitoreados")
     st.markdown(
@@ -3127,6 +3125,7 @@ def render_grupo_auditorias(titulo: str, descripcion: str, auds: list, color: st
         render_auditoria(audit)
 
 
+
 def render_header():
     st.markdown(
         f"""
@@ -3136,12 +3135,12 @@ def render_header():
             <div>
               <div class="nch-eyebrow">NewCity Hospital · Auditoría</div>
               <div class="nch-title">Auditor Hospitalario</div>
-              <div class="nch-subtitle">Preauditoría automática de cuentas hospitalarias: cruza estado de cuenta, servicios de cirugía y nota post-quirúrgica para priorizar hallazgos.</div>
+              <div class="nch-subtitle">Preauditoría automática de cuentas hospitalarias. El auditor ve primero prioridades, después evidencia y trazabilidad solo cuando la necesita.</div>
             </div>
           </div>
           <div class="nch-header-right">
             <div class="nch-status"><span class="nch-status-dot"></span>Motor activo</div>
-            <div class="nch-version">Frontend v3 · reglas intactas</div>
+            <div class="nch-version">Frontend v4 · sin modales · reglas intactas</div>
           </div>
         </div>
         """,
@@ -3149,19 +3148,158 @@ def render_header():
     )
 
 
+def _toggle_session_bool(key: str):
+    st.session_state[key] = not bool(st.session_state.get(key, False))
+
+
+def render_detalle_cuenta(cuenta_key: str, cuentas: dict, todas_auditorias: dict, hash_archivos: str):
+    """Detalle inline estable. No usa st.dialog para evitar problemas de estado/render."""
+    if cuenta_key not in cuentas:
+        st.warning("La cuenta seleccionada ya no está disponible en este lote.")
+        return
+
+    data = cuentas[cuenta_key]
+    auds = todas_auditorias[cuenta_key]
+    grupos = _ui_groups(auds)
+    riesgo_txt, riesgo_cls, riesgo_desc = _ui_riesgo(auds)
+    monto_total = _ui_money(auds)
+    seguro_label = data.get("seguro", "") or "No identificado"
+
+    st.markdown('<div class="executive-title">Detalle de auditoría</div>', unsafe_allow_html=True)
+    st.markdown('<div class="executive-sub">Revisión de la cuenta seleccionada. La lógica de validación no cambia; esta vista solo ordena la información para auditoría.</div>', unsafe_allow_html=True)
+
+    dtop1, dtop2 = st.columns([5, 1])
+    with dtop1:
+        st.markdown(
+            f'<div class="case-card">'
+            f'<div class="case-top"><div class="case-left"><span class="case-dot case-dot-{riesgo_cls}"></span>'
+            f'<div><div class="case-title">{h(cuenta_key)} · {h(data.get("paciente") or "No identificado")}</div>'
+            f'<div class="case-sub">Pagador: {h(seguro_label)} · {len(data.get("archivos", []))} archivo(s)</div>'
+            f'<div class="case-meta">Ingreso {h(data.get("fecha_ingreso", "?"))} → Egreso {h(data.get("fecha_egreso", "?"))} · {h(data.get("dias_estancia", "?"))} día(s)</div></div></div>'
+            f'<div class="case-badges">{_ui_pill(riesgo_txt, riesgo_cls)}<br><span class="muted-small">{h(riesgo_desc)}</span></div></div>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+    with dtop2:
+        st.write("")
+        st.write("")
+        if st.button("Cerrar detalle", key="cerrar_detalle_v4", use_container_width=True):
+            st.session_state["cuenta_seleccionada_v4"] = None
+            st.rerun()
+
+    m1, m2, m3, m4 = st.columns(4)
+    with m1:
+        _ui_kpi("Financieros", str(len(grupos["financieros"])), f"≈ ${monto_total:,.0f}", "red" if grupos["financieros"] else "green")
+    with m2:
+        _ui_kpi("Operativos", str(len(grupos["operativos"])), "Confirmación humana", "yellow" if grupos["operativos"] else "green")
+    with m3:
+        _ui_kpi("Catálogo", str(len(grupos["catalogo"])), "Jordan / sistemas", "blue" if grupos["catalogo"] else "green")
+    with m4:
+        _ui_kpi("OK", str(len(grupos["ok"])), "Ocultas por defecto", "green")
+
+    tab_resumen, tab_hallazgos, tab_evidencia, tab_traza, tab_docs = st.tabs([
+        "Resumen", "Hallazgos", "Evidencia", "Cómo auditó", "Documentos"
+    ])
+
+    with tab_resumen:
+        st.markdown("### Resumen de la cuenta")
+        resumen_rows = [
+            {"Campo": "Cuenta", "Valor": cuenta_key},
+            {"Campo": "Paciente", "Valor": data.get("paciente") or "No identificado"},
+            {"Campo": "Pagador", "Valor": seguro_label},
+            {"Campo": "Riesgo", "Valor": f"{riesgo_txt} — {riesgo_desc}"},
+            {"Campo": "Archivos procesados", "Valor": str(len(data.get("archivos", [])))},
+            {"Campo": "Monto estimado", "Valor": f"≈ ${monto_total:,.0f}"},
+        ]
+        st.dataframe(pd.DataFrame(resumen_rows), use_container_width=True, hide_index=True)
+        if grupos["financieros"] or grupos["operativos"] or grupos["catalogo"]:
+            st.warning("Esta cuenta tiene puntos que requieren revisión antes de cerrarse.")
+        else:
+            st.success("No se detectaron hallazgos relevantes para revisión.")
+
+    with tab_hallazgos:
+        render_grupo_auditorias("🔴 Hallazgos financieros", "Diferencias que pueden impactar el cargo o cobro.", grupos["financieros"], "red", "No hay diferencias financieras relevantes.")
+        render_grupo_auditorias("🟡 Validaciones operativas", "Requieren confirmación con enfermería, almacén, quirófano o área médica.", grupos["operativos"], "yellow", "No hay validaciones operativas pendientes.")
+        render_grupo_auditorias("🔵 Alertas de catálogo / sistemas", "Códigos potencialmente nuevos. No cierran validaciones hasta actualizar catálogo.", grupos["catalogo"], "blue", "No hay alertas de catálogo.")
+        if grupos["informativos"]:
+            with st.expander(f"ℹ️ Informativos ({len(grupos['informativos'])})", expanded=False):
+                for a in grupos["informativos"]:
+                    render_auditoria(a)
+        if grupos["ok"]:
+            with st.expander(f"🟢 Validaciones correctas ({len(grupos['ok'])})", expanded=False):
+                for a in grupos["ok"]:
+                    render_auditoria(a)
+
+    with tab_evidencia:
+        st.markdown("### Evidencia trazada por validación")
+        st.caption("Solo se despliega cuando el auditor necesita revisar códigos, cantidades o documentos asociados a la regla.")
+        auds_con_evidencia = [a for a in auds if a.get("items_cobrados") or a.get("items_esperados")]
+        if not auds_con_evidencia:
+            st.info("No hay evidencia tabular asociada a las validaciones de esta cuenta.")
+        for a in auds_con_evidencia:
+            with st.expander(f"{a.get('label', 'Auditoría')} — {a.get('status', '')}", expanded=False):
+                render_evidencia_audit(a)
+
+    with tab_traza:
+        st.markdown("### Cómo auditó esta cuenta")
+        st.caption("Trazabilidad informativa: muestra claves internas, códigos buscados, área y resultado. No modifica ninguna regla.")
+        df_trace = pd.DataFrame([_ui_audit_trace_row(a) for a in auds])
+        st.dataframe(df_trace, use_container_width=True, hide_index=True)
+
+    with tab_docs:
+        st.markdown("### Documentos procesados")
+        rows = []
+        for af in data.get("archivos", []):
+            tipo_label = {
+                "servicios_cirugia": "Servicios de cirugía",
+                "nota_postquirurgica": "Nota post-quirúrgica",
+                "otro": "Tipo no reconocido",
+            }.get(af.get("tipo_documento"), str(af.get("tipo_documento", "")).replace("estado_cuenta_", "Estado de cuenta — corte "))
+            rows.append({"Archivo": af.get("archivo", ""), "Tipo detectado": tipo_label})
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+    html_reporte = _construir_html_reporte_cuenta(cuenta_key, data, auds, hash_archivos)
+    st.download_button(
+        "📥 Descargar reporte de esta cuenta (HTML)",
+        data=html_reporte.encode("utf-8"),
+        file_name=f"auditoria_{cuenta_key}.html",
+        mime="text/html",
+        key=f"dl_reporte_v4_{cuenta_key}",
+        use_container_width=True,
+    )
+
+
+# =========================================================
+# APP V4 — FRONTEND ESTABLE
+# =========================================================
 render_header()
+
+if "show_config_v4" not in st.session_state:
+    st.session_state["show_config_v4"] = False
+if "show_rules_v4" not in st.session_state:
+    st.session_state["show_rules_v4"] = False
+if "cuenta_seleccionada_v4" not in st.session_state:
+    st.session_state["cuenta_seleccionada_v4"] = None
 
 acol1, acol2, acol3, acol4 = st.columns([3.5, 1, 1, 1])
 with acol1:
-    st.markdown('<div class="action-help">Carga los PDFs y revisa primero las cuentas con impacto financiero, operativo o de catálogo.</div>', unsafe_allow_html=True)
+    st.markdown('<div class="action-help">Carga los PDFs y revisa primero las cuentas con impacto financiero, operativo o de catálogo. Las reglas y configuraciones están ocultas para no saturar al auditor.</div>', unsafe_allow_html=True)
 with acol2:
     if st.button("⚙️ Configuración", use_container_width=True):
-        mostrar_configuracion()
+        _toggle_session_bool("show_config_v4")
 with acol3:
     if st.button("📚 Reglas", use_container_width=True):
-        mostrar_reglas_codigos()
+        _toggle_session_bool("show_rules_v4")
 with acol4:
-    st.button("📥 Exportar", use_container_width=True, disabled=True, help="Disponible después de cargar documentos.")
+    st.button("📥 Exportar", use_container_width=True, disabled=True, help="La exportación aparece al final después de cargar documentos.")
+
+if st.session_state.get("show_config_v4"):
+    with st.expander("⚙️ Configuración de auditoría", expanded=True):
+        mostrar_configuracion()
+
+if st.session_state.get("show_rules_v4"):
+    with st.expander("📚 Reglas y códigos auditados", expanded=True):
+        mostrar_reglas_codigos()
 
 st.markdown(
     '<div class="upload-shell"><div class="upload-title">Carga de documentos</div>'
@@ -3181,7 +3319,7 @@ if not archivos_subidos:
         """
         <div class="empty-state">
           <div class="empty-title">Listo para auditar cuentas hospitalarias</div>
-          <div class="empty-sub">La pantalla principal muestra solo lo necesario para tomar decisiones. La configuración, códigos y trazabilidad quedan ocultos en modales informativos.</div>
+          <div class="empty-sub">La pantalla principal muestra solo lo necesario para tomar decisiones. La configuración, códigos y trazabilidad quedan ocultos en paneles informativos.</div>
           <div class="empty-grid">
             <div class="empty-card"><div class="empty-card-title">1. Prioriza cuentas</div><div class="empty-card-sub">Identifica rápidamente qué cuenta requiere revisión y por qué.</div></div>
             <div class="empty-card"><div class="empty-card-title">2. Separa hallazgos</div><div class="empty-card-sub">Distingue diferencias financieras, validaciones operativas y alertas de catálogo.</div></div>
@@ -3239,108 +3377,6 @@ st.markdown(
     f'<div class="audit-meta-line">Auditoría generada: {h(_ts_auditoria)} · Hash de archivos: <code>{h(_hash_actual[:12])}…</code> · Validaciones OK: {total_ok} · Tolerancia: {tolerancia_ui:.2f}</div>',
     unsafe_allow_html=True,
 )
-
-# Rehabilitar botón visual de exportar mediante sección inferior; Streamlit no permite actualizar el botón del header ya dibujado.
-
-@st.dialog("Detalle de auditoría", width="large")
-def mostrar_detalle(cuenta_key: str):
-    data = cuentas[cuenta_key]
-    auds = todas_auditorias[cuenta_key]
-    grupos = _ui_groups(auds)
-    riesgo_txt, riesgo_cls, riesgo_desc = _ui_riesgo(auds)
-    monto_total = _ui_money(auds)
-    seguro_label = data.get("seguro", "") or "No identificado"
-
-    st.markdown(
-        f'<div class="case-card">'
-        f'<div class="case-top"><div class="case-left"><span class="case-dot case-dot-{riesgo_cls}"></span>'
-        f'<div><div class="case-title">{h(cuenta_key)} · {h(data["paciente"] or "No identificado")}</div>'
-        f'<div class="case-sub">Pagador: {h(seguro_label)}</div>'
-        f'<div class="case-meta">Ingreso {h(data.get("fecha_ingreso", "?"))} → Egreso {h(data.get("fecha_egreso", "?"))} · {h(data.get("dias_estancia", "?"))} día(s)</div></div></div>'
-        f'<div class="case-badges">{_ui_pill(riesgo_txt, riesgo_cls)}<br><span class="muted-small">{h(riesgo_desc)}</span></div></div>'
-        f'</div>',
-        unsafe_allow_html=True,
-    )
-
-    d1, d2, d3, d4 = st.columns(4)
-    with d1:
-        _ui_kpi("Financieros", str(len(grupos["financieros"])), f"≈ ${monto_total:,.0f}", "red" if grupos["financieros"] else "green")
-    with d2:
-        _ui_kpi("Operativos", str(len(grupos["operativos"])), "Confirmación humana", "yellow" if grupos["operativos"] else "green")
-    with d3:
-        _ui_kpi("Catálogo", str(len(grupos["catalogo"])), "Jordan / sistemas", "blue" if grupos["catalogo"] else "green")
-    with d4:
-        _ui_kpi("OK", str(len(grupos["ok"])), "Ocultas por defecto", "green")
-
-    tab_resumen, tab_hallazgos, tab_evidencia, tab_traza, tab_docs = st.tabs(["Resumen", "Hallazgos", "Evidencia", "Cómo auditó", "Documentos"])
-
-    with tab_resumen:
-        st.markdown("### Resumen de la cuenta")
-        resumen_rows = [
-            {"Campo": "Cuenta", "Valor": cuenta_key},
-            {"Campo": "Paciente", "Valor": data.get("paciente") or "No identificado"},
-            {"Campo": "Pagador", "Valor": seguro_label},
-            {"Campo": "Riesgo", "Valor": f"{riesgo_txt} — {riesgo_desc}"},
-            {"Campo": "Archivos procesados", "Valor": str(len(data.get("archivos", [])))},
-            {"Campo": "Monto estimado", "Valor": f"≈ ${monto_total:,.0f}"},
-        ]
-        st.dataframe(pd.DataFrame(resumen_rows), use_container_width=True, hide_index=True)
-        if grupos["financieros"] or grupos["operativos"] or grupos["catalogo"]:
-            st.warning("Esta cuenta tiene puntos que requieren revisión antes de cerrarse.")
-        else:
-            st.success("No se detectaron hallazgos relevantes para revisión.")
-
-    with tab_hallazgos:
-        render_grupo_auditorias("🔴 Hallazgos financieros", "Diferencias que pueden impactar el cargo o cobro.", grupos["financieros"], "red", "No hay diferencias financieras relevantes.")
-        render_grupo_auditorias("🟡 Validaciones operativas", "Requieren confirmación con enfermería, almacén, quirófano o área médica.", grupos["operativos"], "yellow", "No hay validaciones operativas pendientes.")
-        render_grupo_auditorias("🔵 Alertas de catálogo / sistemas", "Códigos potencialmente nuevos. No cierran validaciones hasta actualizar catálogo.", grupos["catalogo"], "blue", "No hay alertas de catálogo.")
-        if grupos["informativos"]:
-            with st.expander(f"ℹ️ Informativos ({len(grupos['informativos'])})", expanded=False):
-                for a in grupos["informativos"]:
-                    render_auditoria(a)
-        if grupos["ok"]:
-            with st.expander(f"🟢 Validaciones correctas ({len(grupos['ok'])})", expanded=False):
-                for a in grupos["ok"]:
-                    render_auditoria(a)
-
-    with tab_evidencia:
-        st.markdown("### Evidencia trazada por validación")
-        auds_con_evidencia = [a for a in auds if a.get("items_cobrados") or a.get("items_esperados")]
-        if not auds_con_evidencia:
-            st.info("No hay evidencia tabular asociada a las validaciones de esta cuenta.")
-        for a in auds_con_evidencia:
-            with st.expander(f"{a.get('label', 'Auditoría')} — {a.get('status', '')}", expanded=False):
-                render_evidencia_audit(a)
-
-    with tab_traza:
-        st.markdown("### Cómo auditó esta cuenta")
-        st.caption("Trazabilidad informativa: muestra claves internas, códigos buscados, área y resultado. No modifica ninguna regla.")
-        df_trace = pd.DataFrame([_ui_audit_trace_row(a) for a in auds])
-        st.dataframe(df_trace, use_container_width=True, hide_index=True)
-
-    with tab_docs:
-        st.markdown("### Documentos procesados")
-        rows = []
-        for af in data["archivos"]:
-            tipo_label = {
-                "servicios_cirugia": "Servicios de cirugía",
-                "nota_postquirurgica": "Nota post-quirúrgica",
-                "otro": "Tipo no reconocido",
-            }.get(af["tipo_documento"], af["tipo_documento"].replace("estado_cuenta_", "Estado de cuenta — corte "))
-            rows.append({"Archivo": af["archivo"], "Tipo detectado": tipo_label})
-        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
-
-    st.divider()
-    html_reporte = _construir_html_reporte_cuenta(cuenta_key, data, auds, _hash_actual)
-    st.download_button(
-        "📥 Descargar reporte de esta cuenta (HTML)",
-        data=html_reporte.encode("utf-8"),
-        file_name=f"auditoria_{cuenta_key}.html",
-        mime="text/html",
-        key=f"dl_reporte_{cuenta_key}",
-        use_container_width=True,
-    )
-
 
 st.markdown('<div class="executive-title">Cuentas analizadas</div>', unsafe_allow_html=True)
 st.markdown('<div class="executive-sub">Ordenadas por prioridad para que el auditor revise primero lo que puede impactar cuenta, operación o catálogo.</div>', unsafe_allow_html=True)
@@ -3410,14 +3446,16 @@ for cuenta, data in cuentas_ordenadas:
         pills += _ui_pill(f"≈ ${monto_total:,.0f}", "dark")
 
     seguro_label = data.get("seguro", "") or "No identificado"
-    archivos_txt = f"{len(data['archivos'])} archivo(s)"
+    archivos_txt = f"{len(data.get('archivos', []))} archivo(s)"
+    seleccionado = st.session_state.get("cuenta_seleccionada_v4") == cuenta
+    card_border = "border-color:#2E90FA;box-shadow:0 12px 38px rgba(46,144,250,.14);" if seleccionado else ""
 
     col_card, col_btn = st.columns([6, 1.1])
     with col_card:
         st.markdown(
-            f'<div class="case-card">'
+            f'<div class="case-card" style="{card_border}">'
             f'<div class="case-top"><div class="case-left"><span class="case-dot case-dot-{riesgo_cls}"></span>'
-            f'<div><div class="case-title">{h(cuenta)} · {h(data["paciente"] or "No identificado")}</div>'
+            f'<div><div class="case-title">{h(cuenta)} · {h(data.get("paciente") or "No identificado")}</div>'
             f'<div class="case-sub">Pagador: {h(seguro_label)} · {h(archivos_txt)}</div>'
             f'<div class="case-meta">{h(riesgo_desc)}</div></div></div>'
             f'<div class="case-badges">{_ui_pill(riesgo_txt, riesgo_cls)}<br>{pills}</div></div>'
@@ -3427,8 +3465,14 @@ for cuenta, data in cuentas_ordenadas:
     with col_btn:
         st.write("")
         st.write("")
-        if st.button("Revisar", key=f"btn_detalle_{cuenta}", type="primary", use_container_width=True):
-            mostrar_detalle(cuenta)
+        if st.button("Revisar" if not seleccionado else "Viendo", key=f"btn_detalle_v4_{cuenta}", type="primary" if not seleccionado else "secondary", use_container_width=True):
+            st.session_state["cuenta_seleccionada_v4"] = cuenta
+            st.rerun()
+
+selected = st.session_state.get("cuenta_seleccionada_v4")
+if selected and selected in cuentas:
+    st.divider()
+    render_detalle_cuenta(selected, cuentas, todas_auditorias, _hash_actual)
 
 st.divider()
 
