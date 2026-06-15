@@ -73,6 +73,49 @@ st.markdown("""
 .ev-table td{padding:5px 8px;border-bottom:0.5px solid var(--color-border-tertiary)}
 .ev-table tr:last-child td{border-bottom:none}
 .mono{font-family:var(--font-mono);font-size:11px}
+
+
+/* ================= FRONTEND V2: lectura para auditor ================= */
+.kpi-card{border:1px solid var(--color-border-tertiary);border-radius:14px;
+  padding:14px 16px;background:var(--color-background-primary);height:100%;
+  box-shadow:0 1px 2px rgba(0,0,0,.03)}
+.kpi-label{font-size:11px;text-transform:uppercase;letter-spacing:.06em;
+  color:var(--color-text-tertiary);font-weight:600;margin-bottom:4px}
+.kpi-value{font-size:25px;font-weight:700;line-height:1.1;color:var(--color-text-primary)}
+.kpi-sub{font-size:11px;color:var(--color-text-secondary);margin-top:5px;line-height:1.35}
+.ux-card{border:1px solid var(--color-border-tertiary);border-radius:14px;
+  padding:13px 16px;background:var(--color-background-primary);margin-bottom:10px}
+.ux-card:hover{box-shadow:0 2px 8px rgba(0,0,0,.05)}
+.ux-card-top{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.ux-title{font-size:14px;font-weight:700;color:var(--color-text-primary)}
+.ux-subtitle{font-size:12px;color:var(--color-text-secondary);line-height:1.45;margin-top:3px}
+.ux-meta{font-size:11px;color:var(--color-text-tertiary);margin-top:6px;line-height:1.45}
+.ux-pill{display:inline-flex;align-items:center;font-size:11px;font-weight:600;
+  padding:3px 8px;border-radius:999px;margin:2px 4px 2px 0;white-space:nowrap}
+.ux-pill-red{background:#FCEBEB;color:#791F1F}.ux-pill-yellow{background:#FAEEDA;color:#633806}
+.ux-pill-blue{background:#EAF2FF;color:#174A7C}.ux-pill-green{background:#EAF3DE;color:#27500A}
+.ux-pill-gray{background:#F1EFE8;color:#444441}.ux-pill-dark{background:#ECECEC;color:#222}
+.badge-blue{background:#EAF2FF;color:#174A7C}.dot-blue{background:#2F74B5}
+.finding-blue{border-color:#2F74B5;background:#EAF2FF;color:#174A7C}
+.audit-card{border:1px solid var(--color-border-tertiary);border-radius:12px;
+  padding:12px 14px;margin-bottom:10px;background:var(--color-background-primary)}
+.audit-card-red{border-left:4px solid #E24B4A}.audit-card-yellow{border-left:4px solid #EF9F27}
+.audit-card-blue{border-left:4px solid #2F74B5}.audit-card-green{border-left:4px solid #639922}
+.audit-card-gray{border-left:4px solid #888780}
+.audit-card-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:6px}
+.audit-card-title{font-size:14px;font-weight:700;color:var(--color-text-primary)}
+.audit-card-result{font-size:12px;line-height:1.45;color:var(--color-text-secondary);margin-top:4px}
+.audit-card-note{font-size:12px;line-height:1.45;color:var(--color-text-secondary);
+  background:var(--color-background-tertiary);border-radius:8px;padding:8px 10px;margin-top:8px}
+.section-title-red{color:#791F1F}.section-title-yellow{color:#633806}
+.section-title-blue{color:#174A7C}.section-title-green{color:#27500A}.section-title-gray{color:#444441}
+.account-row{border:1px solid var(--color-border-tertiary);border-radius:14px;padding:12px 14px;
+  background:var(--color-background-primary);margin-bottom:8px}
+.account-row-head{display:flex;align-items:center;gap:10px;justify-content:space-between}
+.account-main{display:flex;align-items:center;gap:10px;min-width:0}.account-title{font-size:14px;font-weight:700}
+.account-sub{font-size:12px;color:var(--color-text-secondary);margin-top:2px}
+.account-badges{text-align:right;min-width:fit-content}.muted-small{font-size:11px;color:var(--color-text-tertiary)}
+
 </style>
 """, unsafe_allow_html=True)
 
@@ -2297,74 +2340,203 @@ COLS_ESPERADO = [
     ("Línea original","m", "linea_original"),
 ]
 
+
+def _ui_audit_is_catalogo(a: dict) -> bool:
+    return a.get("categoria") == "Alertas de catálogo" or str(a.get("key", "")).startswith("catalogo_")
+
+
+def _ui_audit_is_financiero(a: dict) -> bool:
+    """Clasificación visual solamente. No modifica la lógica de auditoría."""
+    if _ui_audit_is_catalogo(a):
+        return False
+    if a.get("clase") not in ("err", "warn"):
+        return False
+    categoria = a.get("categoria", "")
+    if a.get("monto_diff"):
+        return True
+    if a.get("tipo") == "numerico" and a.get("diff") is not None:
+        return categoria in {"Oxígeno", "Sala quirúrgica", "Estancia"}
+    return categoria in {"Accesorios complementarios", "Verificaciones negativas"} and a.get("clase") == "err"
+
+
+def _ui_audit_is_operativo(a: dict) -> bool:
+    if a.get("clase") not in ("err", "warn"):
+        return False
+    if _ui_audit_is_catalogo(a):
+        return False
+    if _ui_audit_is_financiero(a):
+        return False
+    return True
+
+
+def _ui_groups(auds: list) -> dict:
+    financieros = [a for a in auds if _ui_audit_is_financiero(a)]
+    catalogo = [a for a in auds if _ui_audit_is_catalogo(a) and a.get("clase") in ("err", "warn")]
+    operativos = [a for a in auds if _ui_audit_is_operativo(a)]
+    ok = [a for a in auds if a.get("clase") == "ok"]
+    informativos = [a for a in auds if a.get("clase") == "gray" and not _ui_audit_is_catalogo(a)]
+    return {
+        "financieros": financieros,
+        "operativos": operativos,
+        "catalogo": catalogo,
+        "ok": ok,
+        "informativos": informativos,
+    }
+
+
+def _ui_count(auds: list) -> dict:
+    g = _ui_groups(auds)
+    return {k: len(v) for k, v in g.items()}
+
+
+def _ui_riesgo(auds: list):
+    c = _ui_count(auds)
+    if c["financieros"] > 0:
+        return "Alto", "err", "Diferencias financieras o cargos a corregir"
+    if c["operativos"] > 0:
+        return "Medio", "warn", "Requiere confirmación operativa"
+    if c["catalogo"] > 0:
+        return "Catálogo", "blue", "Revisar códigos con sistemas/Jordan"
+    if c["ok"] > 0:
+        return "Bajo", "ok", "Sin hallazgos relevantes"
+    return "Sin referencias", "gray", "Sin evidencia suficiente"
+
+
+def _ui_money(auds: list) -> float:
+    return sum(
+        a.get("monto_diff") or 0
+        for a in auds
+        if a.get("clase") in ("err", "warn") and a.get("monto_diff")
+    )
+
+
+def _ui_pill(txt: str, cls: str) -> str:
+    return f'<span class="ux-pill ux-pill-{cls}">{h(txt)}</span>'
+
+
+def _ui_kpi(label: str, value: str, sub: str = ""):
+    st.markdown(
+        f'<div class="kpi-card"><div class="kpi-label">{h(label)}</div>'
+        f'<div class="kpi-value">{h(value)}</div>'
+        f'<div class="kpi-sub">{h(sub)}</div></div>',
+        unsafe_allow_html=True,
+    )
+
+
+def _ui_format_num(v, unidad=""):
+    if v is None:
+        return "—"
+    try:
+        if isinstance(v, float):
+            txt = f"{v:.2f}"
+        else:
+            txt = str(v)
+    except Exception:
+        txt = str(v)
+    return f"{txt} {unidad}".strip()
+
+
+def _ui_audit_card_class(audit: dict) -> str:
+    if _ui_audit_is_catalogo(audit):
+        return "blue"
+    if audit.get("clase") == "err":
+        return "red"
+    if audit.get("clase") == "warn":
+        return "yellow"
+    if audit.get("clase") == "ok":
+        return "green"
+    return "gray"
+
+
 def render_auditoria(audit: dict):
-    tipo  = audit["tipo"]
-    clase = audit["clase"]
-    label = audit["label"]
-    status_txt = audit["status"].upper() if audit["status"] == "ok" else audit["status"]
+    """Render visual v2. Solo cambia presentación, no modifica reglas."""
+    tipo  = audit.get("tipo", "")
+    label = audit.get("label", "Auditoría")
+    status = audit.get("status", "")
+    unidad = audit.get("unidad", "")
+    card_cls = _ui_audit_card_class(audit)
+
+    if _ui_audit_is_catalogo(audit):
+        badge = _ui_pill("Catálogo / sistemas", "blue")
+    elif audit.get("clase") == "err":
+        badge = _ui_pill("Crítico", "red")
+    elif audit.get("clase") == "warn":
+        badge = _ui_pill("Revisar", "yellow")
+    elif audit.get("clase") == "ok":
+        badge = _ui_pill("OK", "green")
+    else:
+        badge = _ui_pill("Informativo", "gray")
+
+    detalle = ""
+    if tipo == "numerico":
+        detalle = (
+            f"Cobrado: <b>{h(_ui_format_num(audit.get('cobrado'), unidad))}</b> · "
+            f"Esperado: <b>{h(_ui_format_num(audit.get('esperado'), unidad))}</b>"
+        )
+        monto = audit.get("monto_diff")
+        if monto is not None and monto >= 1:
+            diff = audit.get("diff", 0) or 0
+            etiqueta = "sobrecobro" if diff > 0 else "faltante"
+            detalle += f" · <b>≈ ${monto:,.0f} {h(etiqueta)}</b>"
+    elif tipo == "binario":
+        marcado = audit.get("marcado")
+        cobrado_b = audit.get("cobrado_bool")
+        detalle = (
+            f"Servicios de cirugía: <b>{'marcado' if marcado else 'no marcado'}</b> · "
+            f"Estado de cuenta: <b>{'cobrado' if cobrado_b else 'no cobrado'}</b>"
+        )
+    elif tipo == "negativo":
+        detalle = f"Cargos encontrados en estado de cuenta: <b>{int(audit.get('cobrado') or 0)}</b>"
+    else:
+        detalle = h(status)
+
+    nota = audit.get("nota_auditoria")
+    nota_html = f'<div class="audit-card-note">{h(nota)}</div>' if nota else ""
 
     st.markdown(
-        f'<div class="audit-row">'
-        f'<div class="audit-header">'
-        f'<span class="audit-label">{label}</span>'
-        f'{badge_html(status_txt, clase)}'
+        f'<div class="audit-card audit-card-{card_cls}">'
+        f'<div class="audit-card-head">'
+        f'<div><div class="audit-card-title">{h(label)}</div>'
+        f'<div class="audit-card-result"><b>Resultado:</b> {h(status)}</div></div>'
+        f'<div>{badge}</div>'
+        f'</div>'
+        f'<div class="audit-card-result">{detalle}</div>'
+        f'{nota_html}'
         f'</div>',
         unsafe_allow_html=True,
     )
 
-    if tipo == "numerico":
-        cobrado  = audit["cobrado"]
-        esperado = audit["esperado"]
-        unidad   = audit["unidad"]
-        if esperado is not None:
-            st.markdown(barra_html(cobrado, esperado, clase), unsafe_allow_html=True)
-            sub = f"Cobrado {cobrado:.2f} {unidad}  ·  Esperado {esperado:.2f} {unidad}"
-        else:
-            sub = f"Cobrado {cobrado:.2f} {unidad}"
-        # Monto económico de la diferencia (cuando aplica)
-        monto = audit.get("monto_diff")
-        if monto is not None and monto >= 1:
-            diff = audit.get("diff", 0)
-            etiqueta = "sobrecobro" if diff > 0 else "faltante"
-            sub += (f'  ·  <b style="color:{("#791F1F" if diff < 0 else "#633806")}">'
-                    f'≈ ${monto:,.0f} {etiqueta}</b>')
-        if audit.get("nota_auditoria"):
-            sub += f"<br>{audit['nota_auditoria']}"
-        st.markdown(f'<div class="audit-sub">{sub}</div>', unsafe_allow_html=True)
-
-    elif tipo == "binario":
-        marcado = audit["marcado"]
-        cobrado_b = audit["cobrado_bool"]
-        sub = (f"Servicios de cirugía: {'✓ marcado' if marcado else '— no marcado'}  ·  "
-               f"Estado de cuenta: {'✓ cobrado' if cobrado_b else '— no cobrado'}")
-        st.markdown(f'<div class="audit-sub">{sub}</div>', unsafe_allow_html=True)
-
-    elif tipo == "negativo":
-        n = int(audit["cobrado"])
-        sub = f"{n} cargo(s) encontrado(s) en el estado de cuenta."
-        if audit.get("nota_auditoria"):
-            sub = audit["nota_auditoria"] + "  " + sub
-        st.markdown(f'<div class="audit-sub">{sub}</div>', unsafe_allow_html=True)
-
-    elif tipo == "informativo":
-        sub = audit["status"]
-        if audit.get("nota_auditoria"):
-            sub += f"<br>{audit['nota_auditoria']}"
-        st.markdown(f'<div class="audit-sub">{sub}</div>', unsafe_allow_html=True)
-
-    st.markdown('</div>', unsafe_allow_html=True)
-
-    # Evidencia expandible
     items_cob = audit.get("items_cobrados", [])
     items_esp = audit.get("items_esperados", [])
     if items_cob or items_esp:
-        with st.expander("Ver evidencia"):
+        with st.expander("Ver evidencia", expanded=False):
             if items_esp:
-                st.markdown("**Esperado (servicios de cirugía)**")
+                st.markdown("**Esperado / documentado**")
                 render_tabla_items(items_esp, COLS_ESPERADO)
             if items_cob:
-                st.markdown("**Cobrado (estado de cuenta)**")
+                st.markdown("**Cobrado en estado de cuenta**")
                 render_tabla_items(items_cob, COLS_COBRO)
+
+
+def render_grupo_auditorias(titulo: str, descripcion: str, auds: list, color: str, empty_msg: str = "Sin hallazgos.", expanded: bool = True):
+    total = len(auds)
+    st.markdown(
+        f'<div class="cat-title section-title-{h(color)}">{h(titulo)} '
+        f'<span style="font-weight:400;text-transform:none;letter-spacing:0">· {total}</span></div>',
+        unsafe_allow_html=True,
+    )
+    if descripcion:
+        st.caption(descripcion)
+    if not auds:
+        st.markdown(
+            f'<div class="finding-box finding-gray">{h(empty_msg)}</div>',
+            unsafe_allow_html=True,
+        )
+        return
+    cont = st.container()
+    with cont:
+        for audit in auds:
+            render_auditoria(audit)
 
 # =========================================================
 # LOG POR EMAIL  (invisible al usuario)
@@ -2615,44 +2787,41 @@ if st.session_state.get("_ultimo_log_enviado") != _hash_actual:
     _enviar_log_email(cuentas, todas_auditorias, archivos_bytes)
     st.session_state["_ultimo_log_enviado"] = _hash_actual
 
-total_cuentas    = len(cuentas)
-cuentas_con_diff = sum(
-    1 for auds in todas_auditorias.values()
-    if estado_global(auds)[1] in ("err", "warn")
-)
-total_reglas_err  = sum(
-    sum(1 for a in auds if a["clase"] == "err")
-    for auds in todas_auditorias.values()
-)
-total_reglas_warn = sum(
-    sum(1 for a in auds if a["clase"] == "warn")
-    for auds in todas_auditorias.values()
-)
-# Suma global de hallazgos económicos (sobrecobros + faltantes estimados)
-monto_global = sum(
-    a.get("monto_diff") or 0
-    for auds in todas_auditorias.values()
-    for a in auds
-    if a.get("clase") in ("err", "warn") and a.get("monto_diff")
-)
-
-c1, c2, c3, c4, c5 = st.columns(5)
-c1.metric("Cuentas",          total_cuentas)
-c2.metric("Con diferencias",  cuentas_con_diff)
-c3.metric("Errores críticos", total_reglas_err)
-c4.metric("Advertencias",     total_reglas_warn)
-c5.metric("Monto en hallazgos", f"≈ ${monto_global:,.0f}")
-
-# ── Fix 8: Timestamp y trazabilidad ───────────────────────
 _ts_auditoria = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+
+total_cuentas = len(cuentas)
+total_financieros = sum(len(_ui_groups(auds)["financieros"]) for auds in todas_auditorias.values())
+total_operativos = sum(len(_ui_groups(auds)["operativos"]) for auds in todas_auditorias.values())
+total_catalogo = sum(len(_ui_groups(auds)["catalogo"]) for auds in todas_auditorias.values())
+total_ok = sum(len(_ui_groups(auds)["ok"]) for auds in todas_auditorias.values())
+cuentas_atencion = sum(
+    1 for auds in todas_auditorias.values()
+    if len(_ui_groups(auds)["financieros"]) or len(_ui_groups(auds)["operativos"]) or len(_ui_groups(auds)["catalogo"])
+)
+monto_global = sum(_ui_money(auds) for auds in todas_auditorias.values())
+
+st.markdown("### Resumen del lote")
+c1, c2, c3, c4, c5, c6 = st.columns(6)
+with c1:
+    _ui_kpi("Cuentas", str(total_cuentas), f"{len(archivos_bytes)} archivo(s)")
+with c2:
+    _ui_kpi("A revisar", str(cuentas_atencion), "Cuentas con atención")
+with c3:
+    _ui_kpi("Financieros", str(total_financieros), "Diferencias de cuenta")
+with c4:
+    _ui_kpi("Operativos", str(total_operativos), "Confirmar con área")
+with c5:
+    _ui_kpi("Catálogo", str(total_catalogo), "Avisar a Jordan/sistemas")
+with c6:
+    _ui_kpi("Monto", f"≈ ${monto_global:,.0f}", "Hallazgos estimados")
+
 st.caption(
     f"Auditoría generada: {_ts_auditoria} · "
     f"Hash de archivos: `{_hash_actual[:12]}…` · "
-    f"{len(archivos_bytes)} archivo(s) procesados"
+    f"Validaciones OK: {total_ok}"
 )
 
 st.divider()
-
 # =========================================================
 # DIALOG POPUP PARA DETALLE DE CUENTA
 # =========================================================
@@ -2661,80 +2830,91 @@ def mostrar_detalle(cuenta_key: str):
     """Muestra el detalle completo de una cuenta en un popup modal."""
     data = cuentas[cuenta_key]
     auds = todas_auditorias[cuenta_key]
-    estado_txt, clase = estado_global(auds)
+    grupos = _ui_groups(auds)
+    riesgo_txt, riesgo_cls, riesgo_desc = _ui_riesgo(auds)
 
-    # ── Encabezado del popup ──────────────────────────────
     seguro_label = data.get("seguro", "")
+    monto_total = _ui_money(auds)
+
     st.markdown(
-        f'**{cuenta_key}** — {data["paciente"] or "No identificado"}'
-        + (f' · {seguro_label}' if seguro_label else "")
+        f'<div class="ux-card">'
+        f'<div class="ux-card-top">'
+        f'<div><div class="ux-title">{h(cuenta_key)} — {h(data["paciente"] or "No identificado")}</div>'
+        f'<div class="ux-subtitle">Pagador: {h(seguro_label or "No identificado")}</div>'
+        f'<div class="ux-meta">Ingreso {h(data.get("fecha_ingreso", "?"))} → '
+        f'Egreso {h(data.get("fecha_egreso", "?"))} · {h(data.get("dias_estancia", "?"))} día(s)</div></div>'
+        f'<div class="account-badges">{_ui_pill(riesgo_txt, "red" if riesgo_cls=="err" else "yellow" if riesgo_cls=="warn" else "blue" if riesgo_cls=="blue" else "green" if riesgo_cls=="ok" else "gray")}'
+        f'<div class="muted-small">{h(riesgo_desc)}</div></div>'
+        f'</div></div>',
+        unsafe_allow_html=True,
     )
-    if data.get("fecha_ingreso"):
-        st.caption(
-            f"Ingreso {data['fecha_ingreso']} → Egreso {data['fecha_egreso']} "
-            f"({data['dias_estancia']} día(s))"
-        )
 
-    # ── Hallazgos destacados ──────────────────────────────
-    errores  = [a for a in auds if a["clase"] == "err"]
-    avisos   = [a for a in auds if a["clase"] == "warn"]
-    if errores or avisos:
-        st.markdown("#### Hallazgos que requieren atención")
-        for a in errores + avisos:
-            cls = "finding-err" if a["clase"] == "err" else "finding-warn"
-            monto = a.get("monto_diff")
-            monto_txt = ""
-            if monto is not None and monto >= 1:
-                etiqueta = "sobrecobro" if (a.get("diff") or 0) > 0 else "faltante"
-                monto_txt = f' <b>(≈ ${monto:,.0f} {etiqueta})</b>'
-            st.markdown(
-                f'<div class="finding-box {cls}">'
-                f'<b>{a["label"]}:</b> {a["status"]}.{monto_txt}'
-                + (f' {a["nota_auditoria"]}' if a["nota_auditoria"] else "")
-                + '</div>',
-                unsafe_allow_html=True,
-            )
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        _ui_kpi("Financieros", str(len(grupos["financieros"])), f"≈ ${monto_total:,.0f}")
+    with c2:
+        _ui_kpi("Operativos", str(len(grupos["operativos"])), "Confirmación humana")
+    with c3:
+        _ui_kpi("Catálogo", str(len(grupos["catalogo"])), "Jordan / sistemas")
+    with c4:
+        _ui_kpi("OK", str(len(grupos["ok"])), "Ocultas por defecto")
 
-    # ── Toggle: mostrar también auditorías OK ─────────────
-    n_ok = sum(1 for a in auds if a["clase"] == "ok")
-    mostrar_ok = False
-    if n_ok > 0:
-        mostrar_ok = st.checkbox(
-            f"Mostrar también las {n_ok} validaciones que pasaron correctamente",
+    st.markdown("---")
+
+    render_grupo_auditorias(
+        "🔴 Hallazgos financieros / diferencias de cuenta",
+        "Cargos faltantes, sobrantes o diferencias numéricas que pueden impactar la cuenta.",
+        grupos["financieros"],
+        "red",
+        "No hay diferencias financieras relevantes en esta cuenta.",
+    )
+
+    render_grupo_auditorias(
+        "🟡 Validaciones operativas",
+        "Puntos que requieren confirmación con enfermería, almacén, quirófano o área médica antes de cerrar.",
+        grupos["operativos"],
+        "yellow",
+        "No hay validaciones operativas pendientes.",
+    )
+
+    render_grupo_auditorias(
+        "🔵 Alertas de catálogo / sistemas",
+        "Posibles códigos nuevos detectados por descripción. No se usan para cerrar validaciones hasta actualizar catálogo.",
+        grupos["catalogo"],
+        "blue",
+        "No hay alertas de catálogo.",
+    )
+
+    mostrar_info = False
+    if grupos["informativos"]:
+        mostrar_info = st.checkbox(
+            f"Mostrar {len(grupos['informativos'])} aviso(s) informativo(s)",
             value=False,
-            key=f"chk_mostrar_ok_{cuenta_key}",
+            key=f"chk_info_{cuenta_key}",
+        )
+    if mostrar_info:
+        render_grupo_auditorias(
+            "ℹ️ Informativos",
+            "Avisos documentales o validaciones sin diferencia financiera automática.",
+            grupos["informativos"],
+            "gray",
         )
 
-    # ── Auditorías por categoría (filtradas) ──────────────
-    categorias = []
-    for a in auds:
-        if a["categoria"] not in categorias:
-            categorias.append(a["categoria"])
+    mostrar_ok = False
+    if grupos["ok"]:
+        mostrar_ok = st.checkbox(
+            f"Mostrar {len(grupos['ok'])} validación(es) correcta(s)",
+            value=False,
+            key=f"chk_ok_{cuenta_key}",
+        )
+    if mostrar_ok:
+        render_grupo_auditorias(
+            "🟢 Validaciones correctas",
+            "Reglas que pasaron correctamente.",
+            grupos["ok"],
+            "green",
+        )
 
-    for cat in categorias:
-        items_cat_all = [a for a in auds if a["categoria"] == cat]
-        if mostrar_ok:
-            items_cat = items_cat_all
-        else:
-            items_cat = [a for a in items_cat_all if a["clase"] != "ok"]
-
-        # Si la categoría no tiene nada que mostrar, saltarla
-        if not items_cat:
-            continue
-
-        # Header de categoría con nota de OK ocultas
-        n_ok_cat = sum(1 for a in items_cat_all if a["clase"] == "ok")
-        sufijo = ""
-        if not mostrar_ok and n_ok_cat > 0:
-            sufijo = (f' <span style="color:var(--color-text-tertiary);'
-                      f'font-weight:400;text-transform:none;letter-spacing:0">'
-                      f'· {n_ok_cat} OK ocultas</span>')
-        st.markdown(f'<div class="cat-title">{cat}{sufijo}</div>',
-                    unsafe_allow_html=True)
-        for audit in items_cat:
-            render_auditoria(audit)
-
-    # ── Archivos procesados ───────────────────────────────
     st.markdown('<div class="cat-title">Archivos procesados</div>', unsafe_allow_html=True)
     for af in data["archivos"]:
         tipo_label = {
@@ -2745,7 +2925,6 @@ def mostrar_detalle(cuenta_key: str):
               af["tipo_documento"].replace("estado_cuenta_", "Estado de cuenta — corte "))
         st.markdown(f"- `{af['archivo']}` → {tipo_label}")
 
-    # ── Fix 3: Botón de descarga de reporte ───────────────
     st.divider()
     html_reporte = _construir_html_reporte_cuenta(
         cuenta_key, data, auds, _hash_actual)
@@ -2762,71 +2941,95 @@ def mostrar_detalle(cuenta_key: str):
 # LISTA DE CUENTAS
 # =========================================================
 st.subheader("Cuentas analizadas")
+st.caption("Ordenadas por prioridad para que el auditor revise primero lo que puede impactar cuenta, operación o catálogo.")
 
-# Ordenar por urgencia: más errores arriba, luego más warnings,
-# luego limpias al final. Empate: orden alfabético de cuenta.
+fcol1, fcol2, fcol3 = st.columns([2, 2, 1])
+with fcol1:
+    filtro_busqueda = st.text_input("Buscar cuenta o paciente", "", placeholder="Ej. NC13377 o Blank")
+with fcol2:
+    filtro_tipo = st.selectbox(
+        "Filtrar por atención",
+        ["Todas", "Financieros", "Operativos", "Catálogo", "Sin hallazgos"],
+        index=0,
+    )
+with fcol3:
+    solo_pendientes = st.toggle("Solo pendientes", value=False)
+
+
 def _orden_urgencia(item):
     cta, _ = item
     auds = todas_auditorias[cta]
-    n_err  = sum(1 for a in auds if a["clase"] == "err")
-    n_warn = sum(1 for a in auds if a["clase"] == "warn")
-    return (-n_err, -n_warn, cta)
+    g = _ui_groups(auds)
+    monto = _ui_money(auds)
+    return (-len(g["financieros"]), -len(g["operativos"]), -len(g["catalogo"]), -monto, cta)
 
-cuentas_ordenadas = sorted(cuentas.items(), key=_orden_urgencia)
+
+def _pasa_filtros(cuenta: str, data: dict) -> bool:
+    auds = todas_auditorias[cuenta]
+    g = _ui_groups(auds)
+    q = normalizar(filtro_busqueda or "")
+    if q:
+        base = normalizar(f"{cuenta} {data.get('paciente','')} {data.get('seguro','')}")
+        if q not in base:
+            return False
+    if solo_pendientes and not (g["financieros"] or g["operativos"] or g["catalogo"]):
+        return False
+    if filtro_tipo == "Financieros" and not g["financieros"]:
+        return False
+    if filtro_tipo == "Operativos" and not g["operativos"]:
+        return False
+    if filtro_tipo == "Catálogo" and not g["catalogo"]:
+        return False
+    if filtro_tipo == "Sin hallazgos" and (g["financieros"] or g["operativos"] or g["catalogo"]):
+        return False
+    return True
+
+cuentas_ordenadas = [item for item in sorted(cuentas.items(), key=_orden_urgencia) if _pasa_filtros(item[0], item[1])]
+
+if not cuentas_ordenadas:
+    st.info("No hay cuentas que coincidan con los filtros seleccionados.")
 
 for cuenta, data in cuentas_ordenadas:
-    auds        = todas_auditorias[cuenta]
-    estado_txt, clase = estado_global(auds)
-    n_err  = sum(1 for a in auds if a["clase"] == "err")
-    n_warn = sum(1 for a in auds if a["clase"] == "warn")
+    auds = todas_auditorias[cuenta]
+    grupos = _ui_groups(auds)
+    riesgo_txt, riesgo_cls, riesgo_desc = _ui_riesgo(auds)
+    monto_total = _ui_money(auds)
 
-    resumen_badge = ""
-    if n_err:
-        resumen_badge += f'<span class="badge badge-err" style="margin-right:4px">{n_err} error(es)</span>'
-    if n_warn:
-        resumen_badge += f'<span class="badge badge-warn" style="margin-right:4px">{n_warn} aviso(s)</span>'
-    if not n_err and not n_warn:
-        resumen_badge = badge_html("Sin diferencias", "ok")
+    cls_map = {"err": "red", "warn": "yellow", "blue": "blue", "ok": "green", "gray": "gray"}
+    risk_pill_cls = cls_map.get(riesgo_cls, "gray")
 
-    # Sumar monto económico de los hallazgos
-    monto_total = sum(
-        a.get("monto_diff") or 0
-        for a in auds
-        if a.get("clase") in ("err", "warn") and a.get("monto_diff")
-    )
-    monto_html = ""
+    pills = ""
+    if grupos["financieros"]:
+        pills += _ui_pill(f"{len(grupos['financieros'])} financiero(s)", "red")
+    if grupos["operativos"]:
+        pills += _ui_pill(f"{len(grupos['operativos'])} operativo(s)", "yellow")
+    if grupos["catalogo"]:
+        pills += _ui_pill(f"{len(grupos['catalogo'])} catálogo", "blue")
+    if not (grupos["financieros"] or grupos["operativos"] or grupos["catalogo"]):
+        pills += _ui_pill("Sin hallazgos", "green")
     if monto_total >= 1:
-        monto_html = (f'<span style="font-size:11px;color:#791F1F;font-weight:500;'
-                      f'margin-right:10px">≈ ${monto_total:,.0f}</span>')
+        pills += _ui_pill(f"≈ ${monto_total:,.0f}", "dark")
 
-    # Mostrar seguro en la tarjeta
-    seguro_label = data.get("seguro", "")
-    seguro_html = f' · <span style="font-size:11px">{seguro_label}</span>' if seguro_label else ""
+    seguro_label = data.get("seguro", "") or "No identificado"
+    archivos_txt = f"{len(data['archivos'])} archivo(s)"
 
-    # ── Tarjeta + botón de detalle en la misma fila ───────
     col_card, col_btn = st.columns([6, 1])
     with col_card:
         st.markdown(
-            f'<div class="cuenta-card">'
-            f'{dot_html(clase)}'
-            f'<div style="flex:1">'
-            f'<span style="font-weight:500;font-size:14px">{cuenta}</span>'
-            f'<span style="color:var(--color-text-secondary);font-size:13px;margin-left:10px">'
-            f'{data["paciente"] or "No identificado"}{seguro_html}</span>'
-            f'</div>'
-            f'<span style="font-size:11px;color:var(--color-text-tertiary);margin-right:12px">'
-            f'{len(data["archivos"])} archivo(s)</span>'
-            f'{monto_html}'
-            f'{resumen_badge}'
-            f'</div>',
+            f'<div class="account-row">'
+            f'<div class="account-row-head">'
+            f'<div class="account-main">{dot_html(riesgo_cls if riesgo_cls in ("err","warn","ok","gray") else "blue")}'
+            f'<div><div class="account-title">{h(cuenta)} · {h(data["paciente"] or "No identificado")}</div>'
+            f'<div class="account-sub">Pagador: {h(seguro_label)} · {h(archivos_txt)} · {h(riesgo_desc)}</div></div></div>'
+            f'<div class="account-badges">{_ui_pill(riesgo_txt, risk_pill_cls)}<br>{pills}</div>'
+            f'</div></div>',
             unsafe_allow_html=True,
         )
     with col_btn:
-        if st.button("Ver detalle", key=f"btn_detalle_{cuenta}", use_container_width=True):
+        if st.button("Revisar", key=f"btn_detalle_{cuenta}", use_container_width=True):
             mostrar_detalle(cuenta)
 
 st.divider()
-
 # =========================================================
 # EXPORTAR
 # =========================================================
