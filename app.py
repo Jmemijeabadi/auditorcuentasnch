@@ -298,7 +298,12 @@ CATALOGO_ALERTAS_DEF = [
         "label": "Arco en C",
         "codigos": CODIGOS_ARCO_C,
         "area": "quirofano",
-        "patrones_desc": [r"\buso de arco en c\b", r"\barco en c\b"],
+        # IMPORTANTE: no usar r"\barco en c\b" genérico porque también coincide
+        # con "FUNDA ESTERIL P/ARCO EN C DESECHABLE".
+        # La alerta de código nuevo para Arco en C solo debe detonar cuando parezca
+        # el cargo principal del equipo, no sus accesorios.
+        "patrones_desc": [r"^uso de arco en c\b"],
+        "excluir_codigos": {CODIGO_FUNDA_ARCO_C},
     },
     {
         "key": "funda_arco_c",
