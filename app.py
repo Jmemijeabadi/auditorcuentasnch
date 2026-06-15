@@ -28,6 +28,7 @@ st.set_page_config(page_title="Auditor Hospitalario", layout="wide", page_icon="
 # - Catálogo NCH de aseguradoras para no clasificar como seguro textos desconocidos.
 # - Máquina de anestesia solo aplica cuando el pagador coincide con aseguradora NCH.
 # - RPBI diferenciado: particulares con cargo inicial + adicional cada 7 días; seguros NCH con cargo diario.
+# - Catálogo de códigos monitoreados: los cargos se validan por código; la descripción solo genera alerta de posible código nuevo.
 
 # =========================================================
 # CSS GLOBAL
@@ -105,7 +106,10 @@ CODIGO_MICROSCOPIO       = "IBM-0000034"
 CODIGO_FUNDA_MICROSCOPIO = "ALM-0000878"
 
 # ── PUNTO 11: Arco en C y funda ───────────────────────────
-CODIGO_ARCO_C       = "IBM-0000023"
+# Regla de seguridad: los cargos financieros se validan por código.
+# IBM-0000023 = USO DE ARCO EN C + 120 MIN.
+# IBM-0000026 = USO DE ARCO EN C 90 - 120 MIN.
+CODIGOS_ARCO_C      = {"IBM-0000023", "IBM-0000026"}
 CODIGO_FUNDA_ARCO_C = "ALM-0000877"
 
 # ── PUNTO 6: RPBI ─────────────────────────────────────────
@@ -198,7 +202,160 @@ SERVICIOS_BINARIOS_DEF = [
     # ── PUNTO 11: Arco en C ──────────────────────────────
     ("arco_c", "Arco en C",
      r"\bx\s+arco en c",
-     {"IBM-0000023"}, "quirofano"),
+     CODIGOS_ARCO_C, "quirofano"),
+]
+
+
+# =========================================================
+# CATÁLOGO MONITOREADO PARA ALERTAS DE CÓDIGO NUEVO
+# =========================================================
+# Regla operativa:
+# - La validación financiera se hace por código.
+# - La descripción NO se usa para dar por válido un cargo.
+# - La descripción solo sirve para avisar que posiblemente apareció un
+#   código nuevo que debe agregarse manualmente al catálogo.
+# - Mantener los patrones lo más específicos posible para reducir falsos positivos.
+CATALOGO_ALERTAS_DEF = [
+    {
+        "key": "oxigeno_por_hora",
+        "label": "Oxígeno por hora",
+        "codigos": CODIGOS_OXIGENO,
+        "area": None,
+        "patrones_desc": [r"\boxigeno por hora\b"],
+    },
+    {
+        "key": "sala_cirugia_primera_hora",
+        "label": "Sala de cirugía primera hora",
+        "codigos": {CODIGO_SALA_NORMAL},
+        "area": "quirofano",
+        "patrones_desc": [r"\bsala de cirugia general una hora\b", r"\bsala de cirugia x hr\b"],
+    },
+    {
+        "key": "sala_cirugia_adicional",
+        "label": "Sala de cirugía adicional",
+        "codigos": {CODIGO_SALA_ADICIONAL},
+        "area": "quirofano",
+        "patrones_desc": [r"\bsala de cirugia general por hora adicional\b", r"\bsala de cirugia adicional\b"],
+    },
+    {
+        "key": "sevoflurano",
+        "label": "Sevoflurano",
+        "codigos": {CODIGO_SEVOFLURANO},
+        "area": "quirofano",
+        "patrones_desc": [r"\bsevoflurano\b", r"\bsevoflorane\b"],
+    },
+    {
+        "key": "electrocauterio",
+        "label": "Electrocauterio",
+        "codigos": {CODIGO_ELECTROCAUTERIO},
+        "area": "quirofano",
+        "patrones_desc": [r"\buso de electrocauterio\b"],
+    },
+    {
+        "key": "lapiz_electrocauterio",
+        "label": "Lápiz de electrocauterio",
+        "codigos": {CODIGO_LAPIZ_ELECTRO},
+        "area": "quirofano",
+        "patrones_desc": [r"\blapiz p/?electrocauterio\b", r"\blapiz.*electrocauterio\b"],
+    },
+    {
+        "key": "placa_electrocauterio",
+        "label": "Placa de electrocauterio",
+        "codigos": {CODIGO_PLACA_ELECTRO},
+        "area": "quirofano",
+        "patrones_desc": [r"\bplaca p/?electrocauterio\b", r"\bplaca.*electrocauterio\b"],
+    },
+    {
+        "key": "bomba_infusion",
+        "label": "Bomba de infusión",
+        "codigos": {CODIGO_BOMBA},
+        "area": None,
+        "patrones_desc": [r"\buso bomba de infusion\b", r"\bbomba de infusion\b"],
+    },
+    {
+        "key": "equipo_infusomat",
+        "label": "Equipo infusomat",
+        "codigos": {CODIGO_EQUIPO_INFUSOMAT},
+        "area": None,
+        "patrones_desc": [r"\bequipo para bomba infusomat\b", r"\binfusomat\b"],
+    },
+    {
+        "key": "microscopio",
+        "label": "Microscopio",
+        "codigos": {CODIGO_MICROSCOPIO},
+        "area": "quirofano",
+        "patrones_desc": [r"\bmicroscopio quirurgico\b", r"\bmicroscopio\b"],
+    },
+    {
+        "key": "funda_microscopio",
+        "label": "Funda de microscopio",
+        "codigos": {CODIGO_FUNDA_MICROSCOPIO},
+        "area": "quirofano",
+        "patrones_desc": [r"\bfunda.*microscopio\b"],
+    },
+    {
+        "key": "arco_c",
+        "label": "Arco en C",
+        "codigos": CODIGOS_ARCO_C,
+        "area": "quirofano",
+        "patrones_desc": [r"\buso de arco en c\b", r"\barco en c\b"],
+    },
+    {
+        "key": "funda_arco_c",
+        "label": "Funda de Arco en C",
+        "codigos": {CODIGO_FUNDA_ARCO_C},
+        "area": "quirofano",
+        "patrones_desc": [r"\bfunda.*arco en c\b"],
+    },
+    {
+        "key": "rpbi",
+        "label": "Disposición de RPBI",
+        "codigos": {CODIGO_RPBI},
+        "area": None,
+        "patrones_desc": [r"\bdisposicion de r\.?p\.?b\.?i\.?\b", r"\brpbi\b"],
+    },
+    {
+        "key": "habitacion_standard",
+        "label": "Habitación standard",
+        "codigos": {"HOS-0000001"},
+        "area": "hospitalizacion",
+        "patrones_desc": [r"\bhabitacion standard\b"],
+    },
+    {
+        "key": "habitacion_ambulatoria",
+        "label": "Habitación ambulatoria",
+        "codigos": {"HOS-0000003"},
+        "area": "hospitalizacion",
+        "patrones_desc": [r"\bhabitacion ambulatoria\b"],
+    },
+    {
+        "key": "aspirador",
+        "label": "Torre de aspiración / aspirador",
+        "codigos": {"IBM-0000008"},
+        "area": "quirofano",
+        "patrones_desc": [r"\baspirador por evento\b", r"\btorre de aspiracion\b"],
+    },
+    {
+        "key": "monitor_qx",
+        "label": "Monitor QX",
+        "codigos": {"IBM-0000035"},
+        "area": "quirofano",
+        "patrones_desc": [r"\bmonitor quirofano\b", r"\bmonitor signos vitales\b", r"\bblood pressure\b"],
+    },
+    {
+        "key": "sala_recuperacion",
+        "label": "Sala de recuperación",
+        "codigos": {"REC-0000001"},
+        "area": "recuperacion",
+        "patrones_desc": [r"\bsala de recuperacion\b"],
+    },
+    {
+        "key": "monitor_recuperacion",
+        "label": "Monitor SV recuperación",
+        "codigos": {"IBM-0000010"},
+        "area": "recuperacion",
+        "patrones_desc": [r"\bmonitor signos vitales\b", r"\bblood pressure\b", r"\bmonitor sv recuperacion\b"],
+    },
 ]
 
 # =========================================================
@@ -844,6 +1001,76 @@ def _calcular_monto_diff(diff, items_cobrados):
         return None
     return abs(diff) * precio
 
+
+def _detectar_alertas_catalogo(items: list) -> list:
+    """
+    Detecta posibles códigos nuevos por descripción, sin usarlos como cargo válido.
+
+    Importante:
+    - Esta función NO corrige diferencias financieras.
+    - Esta función NO agrega cargos esperados/cobrados.
+    - Solo avisa cuando una descripción parece pertenecer a un concepto auditado,
+      pero el código no está en el catálogo configurado.
+    """
+    alertas = []
+    vistos = set()
+
+    for regla in CATALOGO_ALERTAS_DEF:
+        codigos_validos = {str(c).upper().strip() for c in regla.get("codigos", set())}
+        area_esperada = regla.get("area")
+        patrones = regla.get("patrones_desc", [])
+        label = regla.get("label", regla.get("key", "concepto"))
+        key = regla.get("key", label)
+
+        coincidencias = defaultdict(list)
+
+        for item in items:
+            area_item = item.get("area", "")
+            if area_esperada and area_item != area_esperada:
+                continue
+
+            codigo = str(item.get("codigo", "")).upper().strip()
+            if not codigo or codigo in codigos_validos:
+                continue
+
+            descripcion_norm = normalizar(item.get("descripcion", ""))
+            if any(re.search(patron, descripcion_norm) for patron in patrones):
+                coincidencias[codigo].append(item)
+
+        for codigo, items_codigo in coincidencias.items():
+            firma = (key, codigo)
+            if firma in vistos:
+                continue
+            vistos.add(firma)
+
+            descripcion_ejemplo = items_codigo[0].get("descripcion", "") if items_codigo else ""
+            status = (
+                f"AVISAR A JORDAN. Posible nuevo código de {label} detectado por descripción. "
+                f"No se tomó como cargo válido hasta actualizar catálogo."
+            )
+
+            alertas.append({
+                "categoria": "Alertas de catálogo",
+                "key":       f"catalogo_{key}_{codigo}",
+                "label":     f"Código no catalogado — {label}",
+                "tipo":      "informativo",
+                "unidad":    "",
+                "cobrado":   0,
+                "esperado":  None,
+                "status":    status,
+                "diff":      None,
+                "clase":     "warn",
+                "items_cobrados":  items_codigo,
+                "items_esperados": [],
+                "nota_auditoria": (
+                    f"Código detectado: {codigo}. Descripción ejemplo: {descripcion_ejemplo}. "
+                    f"Este cargo no fue usado para cerrar la validación de {label}; "
+                    f"si el código es correcto, agréguelo al catálogo correspondiente."
+                ),
+            })
+
+    return alertas
+
 def construir_auditorias(data: dict, tolerancia: float) -> list:
     items     = data["todos_los_items"]
     sc        = data["servicios_cirugia"] or {}
@@ -862,6 +1089,12 @@ def construir_auditorias(data: dict, tolerancia: float) -> list:
         return any(p in d for p in palabras)
 
     auditorias = []
+
+    # ══════════════════════════════════════════════════════
+    # Alertas de catálogo: posibles códigos nuevos detectados por descripción.
+    # Estas alertas NO validan cargos. Solo avisan para actualizar catálogo.
+    # ══════════════════════════════════════════════════════
+    auditorias.extend(_detectar_alertas_catalogo(items))
 
     # ══════════════════════════════════════════════════════
     # Fix 7: Alerta de múltiples cirugías
@@ -1464,7 +1697,7 @@ def construir_auditorias(data: dict, tolerancia: float) -> list:
     # Ahora: si la funda aparece sin arco documentado ni cobrado,
     # también se genera un aviso para que el revisor lo confirme con el área.
     # ══════════════════════════════════════════════════════
-    arco_items   = por_codigo({CODIGO_ARCO_C}, "quirofano")
+    arco_items   = por_codigo(CODIGOS_ARCO_C, "quirofano")
     funda_arco   = por_codigo({CODIGO_FUNDA_ARCO_C}, "quirofano")
     arco_marcado = sc.get("servicios_marcados", {}).get("arco_c", False) if sc else False
 
