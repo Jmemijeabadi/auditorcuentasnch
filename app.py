@@ -1017,6 +1017,7 @@ def _detectar_alertas_catalogo(items: list) -> list:
 
     for regla in CATALOGO_ALERTAS_DEF:
         codigos_validos = {str(c).upper().strip() for c in regla.get("codigos", set())}
+        codigos_excluir = {str(c).upper().strip() for c in regla.get("excluir_codigos", set())}
         area_esperada = regla.get("area")
         patrones = regla.get("patrones_desc", [])
         label = regla.get("label", regla.get("key", "concepto"))
@@ -1030,7 +1031,11 @@ def _detectar_alertas_catalogo(items: list) -> list:
                 continue
 
             codigo = str(item.get("codigo", "")).upper().strip()
-            if not codigo or codigo in codigos_validos:
+            # No alertar códigos que ya son válidos para este concepto, ni códigos
+            # que pertenecen a accesorios/complementos conocidos del mismo concepto.
+            # Ejemplo: ALM-0000877 es la funda de Arco en C; no debe detonar
+            # alerta como si fuera un nuevo código del equipo Arco en C.
+            if not codigo or codigo in codigos_validos or codigo in codigos_excluir:
                 continue
 
             descripcion_norm = normalizar(item.get("descripcion", ""))
