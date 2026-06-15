@@ -2369,6 +2369,30 @@ def _ui_audit_is_operativo(a: dict) -> bool:
     return True
 
 
+def _ui_loader_markup(total_archivos: int) -> str:
+    plural = "archivo" if total_archivos == 1 else "archivos"
+    return f"""
+    <div class="audit-loader-overlay">
+      <div class="audit-loader-card">
+        <div class="audit-loader-logo-wrap"><img class="audit-loader-logo" src="{LOGO_NCH_URL}" /></div>
+        <div class="audit-loader-ring"></div>
+        <div class="audit-loader-title">Analizando cuentas hospitalarias</div>
+        <div class="audit-loader-sub">
+          Estamos leyendo {total_archivos} {plural}, cruzando hoja de servicios, estado de cuenta,
+          nota post-quirúrgica, códigos y reglas de auditoría.
+        </div>
+        <div class="audit-loader-steps">
+          <span class="audit-loader-step">PDFs</span>
+          <span class="audit-loader-step">Códigos</span>
+          <span class="audit-loader-step">Reglas</span>
+          <span class="audit-loader-step">Evidencia</span>
+        </div>
+        <div class="audit-loader-bar"><div class="audit-loader-bar-fill"></div></div>
+      </div>
+    </div>
+    """
+
+
 def _ui_groups(auds: list) -> dict:
     financieros = [a for a in auds if _ui_audit_is_financiero(a)]
     catalogo = [a for a in auds if _ui_audit_is_catalogo(a) and a.get("clase") in ("err", "warn")]
@@ -2858,6 +2882,146 @@ header[data-testid="stHeader"]{background:rgba(255,255,255,.72);backdrop-filter:
 .muted-small{font-size:11px;color:#98A2B3;}
 .config-note{font-size:13px;color:#667085;line-height:1.55;background:#F8FAFC;border:1px solid #EEF2F6;border-radius:14px;padding:12px;margin-bottom:12px;}
 
+
+/* Modal de detalle: vista amplia tipo app, sin perder al auditor en la pantalla principal */
+div[data-testid="stDialog"] div[role="dialog"]{
+  width:min(1120px, calc(100vw - 48px)) !important;
+  max-width:1120px !important;
+  border-radius:24px !important;
+}
+div[data-testid="stDialog"] section{
+  max-height:88vh !important;
+}
+.modal-helper{
+  font-size:12px;
+  color:#667085;
+  background:#F8FAFC;
+  border:1px solid #EEF2F6;
+  border-radius:14px;
+  padding:10px 12px;
+  margin-bottom:12px;
+}
+
+/* Loader central de análisis */
+.audit-loader-overlay{
+  position:fixed;
+  inset:0;
+  z-index:999999;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  background:rgba(248,250,252,.82);
+  backdrop-filter:blur(9px);
+  -webkit-backdrop-filter:blur(9px);
+}
+.audit-loader-card{
+  width:min(520px, calc(100vw - 36px));
+  border:1px solid #E6EAF0;
+  border-radius:28px;
+  padding:28px 30px 26px;
+  background:linear-gradient(135deg,#FFFFFF 0%,#F8FBFD 100%);
+  box-shadow:0 24px 70px rgba(16,24,40,.18);
+  text-align:center;
+  position:relative;
+  overflow:hidden;
+}
+.audit-loader-card:before{
+  content:"";
+  position:absolute;
+  left:-35%;
+  top:0;
+  width:35%;
+  height:100%;
+  background:linear-gradient(90deg, transparent, rgba(46,144,250,.10), transparent);
+  animation:auditLoaderSweep 1.85s ease-in-out infinite;
+}
+.audit-loader-logo-wrap{
+  width:92px;
+  height:72px;
+  margin:0 auto 16px;
+  border-radius:20px;
+  background:#FFFFFF;
+  border:1px solid #E6EAF0;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  box-shadow:0 10px 26px rgba(16,24,40,.08);
+  position:relative;
+  z-index:1;
+}
+.audit-loader-logo{max-width:76px;max-height:56px;object-fit:contain;}
+.audit-loader-ring{
+  width:54px;
+  height:54px;
+  border-radius:50%;
+  border:5px solid #EAF2FF;
+  border-top-color:#2E90FA;
+  border-right-color:#0E7490;
+  margin:0 auto 16px;
+  animation:auditLoaderSpin .9s linear infinite;
+  position:relative;
+  z-index:1;
+}
+.audit-loader-title{
+  font-size:22px;
+  font-weight:850;
+  color:#101828;
+  letter-spacing:-.02em;
+  margin-bottom:8px;
+  position:relative;
+  z-index:1;
+}
+.audit-loader-sub{
+  font-size:13px;
+  color:#667085;
+  line-height:1.55;
+  margin:0 auto 18px;
+  max-width:410px;
+  position:relative;
+  z-index:1;
+}
+.audit-loader-steps{
+  display:flex;
+  justify-content:center;
+  gap:8px;
+  flex-wrap:wrap;
+  margin-bottom:18px;
+  position:relative;
+  z-index:1;
+}
+.audit-loader-step{
+  font-size:11px;
+  font-weight:800;
+  color:#175CD3;
+  background:#D1E9FF;
+  border:1px solid #B2DDFF;
+  border-radius:999px;
+  padding:6px 9px;
+}
+.audit-loader-bar{
+  width:100%;
+  height:8px;
+  border-radius:999px;
+  background:#EEF2F6;
+  overflow:hidden;
+  position:relative;
+  z-index:1;
+}
+.audit-loader-bar-fill{
+  width:42%;
+  height:100%;
+  border-radius:999px;
+  background:linear-gradient(90deg,#0E7490,#2E90FA,#12B76A);
+  animation:auditLoaderBar 1.35s ease-in-out infinite;
+}
+@keyframes auditLoaderSpin{to{transform:rotate(360deg)}}
+@keyframes auditLoaderSweep{0%{left:-35%}55%,100%{left:105%}}
+@keyframes auditLoaderBar{
+  0%{transform:translateX(-115%);}
+  50%{transform:translateX(75%);}
+  100%{transform:translateX(235%);}
+}
+
 @media(max-width:900px){
   .nch-header{flex-direction:column;align-items:flex-start}.nch-header-right{text-align:left}.case-top{flex-direction:column}.case-badges{text-align:left;min-width:0}.empty-grid{grid-template-columns:1fr}
 }
@@ -3140,7 +3304,7 @@ def render_header():
           </div>
           <div class="nch-header-right">
             <div class="nch-status"><span class="nch-status-dot"></span>Motor activo</div>
-            <div class="nch-version">Frontend v4 · sin modales · reglas intactas</div>
+            <div class="nch-version">Frontend v5 · detalle en modal · reglas intactas</div>
           </div>
         </div>
         """,
@@ -3152,8 +3316,24 @@ def _toggle_session_bool(key: str):
     st.session_state[key] = not bool(st.session_state.get(key, False))
 
 
-def render_detalle_cuenta(cuenta_key: str, cuentas: dict, todas_auditorias: dict, hash_archivos: str):
-    """Detalle inline estable. No usa st.dialog para evitar problemas de estado/render."""
+def _modal_decorator(title: str):
+    """Usa st.dialog cuando está disponible. Si el servidor tiene Streamlit viejo, no rompe la app."""
+    dialog_fn = getattr(st, "dialog", None) or getattr(st, "experimental_dialog", None)
+    if dialog_fn is None:
+        def passthrough(fn):
+            return fn
+        return passthrough
+    try:
+        return dialog_fn(title, width="large")
+    except TypeError:
+        return dialog_fn(title)
+
+
+_MODAL_DISPONIBLE = bool(getattr(st, "dialog", None) or getattr(st, "experimental_dialog", None))
+
+
+def render_detalle_cuenta_body(cuenta_key: str, cuentas: dict, todas_auditorias: dict, hash_archivos: str, dentro_modal: bool = False):
+    """Contenido del detalle. Se renderiza dentro del modal para no perder al auditor."""
     if cuenta_key not in cuentas:
         st.warning("La cuenta seleccionada ya no está disponible en este lote.")
         return
@@ -3165,8 +3345,13 @@ def render_detalle_cuenta(cuenta_key: str, cuentas: dict, todas_auditorias: dict
     monto_total = _ui_money(auds)
     seguro_label = data.get("seguro", "") or "No identificado"
 
-    st.markdown('<div class="executive-title">Detalle de auditoría</div>', unsafe_allow_html=True)
-    st.markdown('<div class="executive-sub">Revisión de la cuenta seleccionada. La lógica de validación no cambia; esta vista solo ordena la información para auditoría.</div>', unsafe_allow_html=True)
+    if dentro_modal:
+        st.markdown(
+            '<div class="modal-helper">Detalle abierto en modal. La pantalla principal permanece limpia; cierra esta ventana para volver a la lista de cuentas.</div>',
+            unsafe_allow_html=True,
+        )
+    else:
+        st.warning("Tu versión de Streamlit no soporta modales. Actualiza Streamlit para ver el detalle como ventana emergente.")
 
     dtop1, dtop2 = st.columns([5, 1])
     with dtop1:
@@ -3183,8 +3368,8 @@ def render_detalle_cuenta(cuenta_key: str, cuentas: dict, todas_auditorias: dict
     with dtop2:
         st.write("")
         st.write("")
-        if st.button("Cerrar detalle", key="cerrar_detalle_v4", use_container_width=True):
-            st.session_state["cuenta_seleccionada_v4"] = None
+        if st.button("Cerrar", key=f"cerrar_modal_v5_{cuenta_key}", use_container_width=True):
+            st.session_state["cuenta_modal_v5"] = None
             st.rerun()
 
     m1, m2, m3, m4 = st.columns(4)
@@ -3264,13 +3449,17 @@ def render_detalle_cuenta(cuenta_key: str, cuentas: dict, todas_auditorias: dict
         data=html_reporte.encode("utf-8"),
         file_name=f"auditoria_{cuenta_key}.html",
         mime="text/html",
-        key=f"dl_reporte_v4_{cuenta_key}",
+        key=f"dl_reporte_v5_{cuenta_key}",
         use_container_width=True,
     )
 
 
+@_modal_decorator("Detalle de auditoría de la cuenta")
+def render_detalle_cuenta_modal(cuenta_key: str, cuentas: dict, todas_auditorias: dict, hash_archivos: str):
+    render_detalle_cuenta_body(cuenta_key, cuentas, todas_auditorias, hash_archivos, dentro_modal=_MODAL_DISPONIBLE)
+
 # =========================================================
-# APP V4 — FRONTEND ESTABLE
+# APP V5 — FRONTEND ESTABLE CON DETALLE EN MODAL
 # =========================================================
 render_header()
 
@@ -3278,6 +3467,9 @@ if "show_config_v4" not in st.session_state:
     st.session_state["show_config_v4"] = False
 if "show_rules_v4" not in st.session_state:
     st.session_state["show_rules_v4"] = False
+if "cuenta_modal_v5" not in st.session_state:
+    st.session_state["cuenta_modal_v5"] = None
+# Se conserva la llave vieja para no romper sesiones previas, pero ya no controla el detalle.
 if "cuenta_seleccionada_v4" not in st.session_state:
     st.session_state["cuenta_seleccionada_v4"] = None
 
@@ -3333,20 +3525,27 @@ if not archivos_subidos:
 
 archivos_bytes = [(f.name, f.read()) for f in archivos_subidos]
 
-with st.spinner("Analizando documentos…"):
-    cuentas = consolidar_por_cuenta(archivos_bytes)
+_hash_actual = _hash_archivos(archivos_bytes)
+_ts_auditoria = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+
+# Loader central mientras se leen PDFs y se construyen auditorías.
+# No modifica la lógica del motor; solo mejora la experiencia visual durante el procesamiento.
+_loader_placeholder = st.empty()
+_loader_placeholder.markdown(_ui_loader_markup(len(archivos_bytes)), unsafe_allow_html=True)
+try:
+    with st.spinner("Analizando documentos…"):
+        cuentas = consolidar_por_cuenta(archivos_bytes)
+        todas_auditorias = {cta: construir_auditorias(data, tolerancia_ui) for cta, data in cuentas.items()}
+
+        if st.session_state.get("_ultimo_log_enviado") != _hash_actual:
+            _enviar_log_email(cuentas, todas_auditorias, archivos_bytes)
+            st.session_state["_ultimo_log_enviado"] = _hash_actual
+finally:
+    _loader_placeholder.empty()
 
 # =========================================================
 # MÉTRICAS GLOBALES
 # =========================================================
-todas_auditorias = {cta: construir_auditorias(data, tolerancia_ui) for cta, data in cuentas.items()}
-
-_hash_actual = _hash_archivos(archivos_bytes)
-if st.session_state.get("_ultimo_log_enviado") != _hash_actual:
-    _enviar_log_email(cuentas, todas_auditorias, archivos_bytes)
-    st.session_state["_ultimo_log_enviado"] = _hash_actual
-
-_ts_auditoria = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
 
 total_cuentas = len(cuentas)
 total_financieros = sum(len(_ui_groups(auds)["financieros"]) for auds in todas_auditorias.values())
@@ -3447,8 +3646,8 @@ for cuenta, data in cuentas_ordenadas:
 
     seguro_label = data.get("seguro", "") or "No identificado"
     archivos_txt = f"{len(data.get('archivos', []))} archivo(s)"
-    seleccionado = st.session_state.get("cuenta_seleccionada_v4") == cuenta
-    card_border = "border-color:#2E90FA;box-shadow:0 12px 38px rgba(46,144,250,.14);" if seleccionado else ""
+    modal_abierto = st.session_state.get("cuenta_modal_v5") == cuenta
+    card_border = "border-color:#2E90FA;box-shadow:0 12px 38px rgba(46,144,250,.14);" if modal_abierto else ""
 
     col_card, col_btn = st.columns([6, 1.1])
     with col_card:
@@ -3465,14 +3664,14 @@ for cuenta, data in cuentas_ordenadas:
     with col_btn:
         st.write("")
         st.write("")
-        if st.button("Revisar" if not seleccionado else "Viendo", key=f"btn_detalle_v4_{cuenta}", type="primary" if not seleccionado else "secondary", use_container_width=True):
-            st.session_state["cuenta_seleccionada_v4"] = cuenta
+        if st.button("Ver detalle", key=f"btn_detalle_v5_{cuenta}", type="primary", use_container_width=True):
+            st.session_state["cuenta_modal_v5"] = cuenta
+            st.session_state["cuenta_seleccionada_v4"] = None
             st.rerun()
 
-selected = st.session_state.get("cuenta_seleccionada_v4")
-if selected and selected in cuentas:
-    st.divider()
-    render_detalle_cuenta(selected, cuentas, todas_auditorias, _hash_actual)
+modal_cuenta = st.session_state.get("cuenta_modal_v5")
+if modal_cuenta and modal_cuenta in cuentas:
+    render_detalle_cuenta_modal(modal_cuenta, cuentas, todas_auditorias, _hash_actual)
 
 st.divider()
 
