@@ -2722,50 +2722,475 @@ def _enviar_log_email(
 
 
 # =========================================================
-# SIDEBAR
+# FRONTEND V3 — PRODUCTO DE AUDITORÍA OPERATIVA
 # =========================================================
-with st.sidebar:
-    st.markdown("### ⚙️ Configuración")
-    tolerancia_ui = st.slider("Tolerancia (hrs / ml / días)",
-                              0.0, 1.0, 0.01, 0.01,
-                              help="Diferencia mínima para marcar una discrepancia.")
-    st.markdown("---")
+LOGO_NCH_URL = "https://newcityhospital.com/wp-content/uploads/2023/08/logo_newcity_hospital.png"
+
+# Mantener la misma tolerancia por defecto del MVP original.
+if "tolerancia_ui" not in st.session_state:
+    st.session_state["tolerancia_ui"] = 0.01
+
+tolerancia_ui = float(st.session_state.get("tolerancia_ui", 0.01))
+
+st.markdown("""
+<style>
+/* ================= FRONTEND V3 ================= */
+.block-container{
+  max-width:1280px;
+  padding-top:1.25rem;
+  padding-left:2rem;
+  padding-right:2rem;
+}
+#MainMenu, footer {visibility:hidden;}
+header[data-testid="stHeader"]{background:rgba(255,255,255,.72);backdrop-filter:blur(10px);}
+
+.nch-header{
+  width:100%;
+  border:1px solid #E6EAF0;
+  border-radius:26px;
+  padding:22px 26px;
+  background:linear-gradient(135deg,#FFFFFF 0%,#F8FBFD 48%,#F3FAFB 100%);
+  box-shadow:0 18px 50px rgba(16,24,40,.07);
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:24px;
+  margin-bottom:16px;
+}
+.nch-brand{display:flex;align-items:center;gap:18px;min-width:0;}
+.nch-logo-wrap{
+  width:86px;height:70px;border-radius:18px;background:#FFFFFF;
+  border:1px solid #E6EAF0;display:flex;align-items:center;justify-content:center;
+  box-shadow:0 8px 24px rgba(16,24,40,.06);flex-shrink:0;
+}
+.nch-logo{max-width:72px;max-height:55px;object-fit:contain;}
+.nch-eyebrow{font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:.12em;color:#0E7490;margin-bottom:4px;}
+.nch-title{font-size:34px;font-weight:850;line-height:1.05;color:#101828;letter-spacing:-.03em;}
+.nch-subtitle{font-size:14px;color:#667085;line-height:1.45;margin-top:8px;max-width:760px;}
+.nch-header-right{text-align:right;min-width:180px;}
+.nch-status{
+  display:inline-flex;align-items:center;gap:8px;background:#ECFDF3;color:#027A48;
+  border:1px solid #ABEFC6;padding:8px 12px;border-radius:999px;font-size:12px;font-weight:800;
+}
+.nch-status-dot{width:8px;height:8px;border-radius:50%;background:#12B76A;display:inline-block;}
+.nch-version{font-size:11px;color:#98A2B3;margin-top:8px;}
+
+.action-bar{
+  display:flex;align-items:center;justify-content:space-between;gap:14px;
+  border:1px solid #EEF2F6;border-radius:18px;padding:12px 14px;background:#FFFFFF;
+  margin-bottom:24px;box-shadow:0 4px 18px rgba(16,24,40,.035);
+}
+.action-help{font-size:13px;color:#667085;line-height:1.4;}
+
+.upload-shell{
+  border:1px dashed #B8CBD8;border-radius:22px;padding:18px;background:#F8FBFD;margin-bottom:24px;
+}
+.upload-title{font-size:16px;font-weight:800;color:#101828;margin-bottom:4px;}
+.upload-sub{font-size:13px;color:#667085;margin-bottom:8px;}
+
+.empty-state{
+  border:1px solid #E6EAF0;border-radius:26px;padding:34px;
+  background:linear-gradient(135deg,#FFFFFF 0%,#F8FBFD 100%);
+  box-shadow:0 16px 45px rgba(16,24,40,.06);margin-top:12px;
+}
+.empty-title{font-size:26px;font-weight:850;letter-spacing:-.02em;color:#101828;margin-bottom:8px;}
+.empty-sub{font-size:15px;color:#667085;line-height:1.55;max-width:780px;}
+.empty-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-top:22px;}
+.empty-card{border:1px solid #EEF2F6;border-radius:18px;padding:16px;background:#FFFFFF;}
+.empty-card-title{font-size:14px;font-weight:800;color:#101828;margin-bottom:6px;}
+.empty-card-sub{font-size:12px;color:#667085;line-height:1.5;}
+
+.executive-title{font-size:24px;font-weight:850;color:#101828;letter-spacing:-.02em;margin:10px 0 4px;}
+.executive-sub{font-size:13px;color:#667085;margin-bottom:14px;}
+.kpi-card{
+  border:1px solid #E6EAF0;border-radius:18px;padding:16px 18px;background:#FFFFFF;height:100%;
+  box-shadow:0 6px 24px rgba(16,24,40,.045);
+}
+.kpi-label{font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:#667085;font-weight:850;margin-bottom:8px;}
+.kpi-value{font-size:28px;font-weight:850;line-height:1;color:#101828;letter-spacing:-.03em;}
+.kpi-sub{font-size:11px;color:#667085;margin-top:8px;line-height:1.35;}
+.kpi-red .kpi-value{color:#B42318}.kpi-yellow .kpi-value{color:#B54708}.kpi-blue .kpi-value{color:#175CD3}.kpi-green .kpi-value{color:#027A48}
+.audit-meta-line{font-size:12px;color:#98A2B3;margin:14px 0 26px;}
+.audit-meta-line code{color:#344054;background:#F2F4F7;padding:2px 6px;border-radius:6px;}
+
+.filter-card{
+  border:1px solid #EEF2F6;border-radius:20px;padding:16px;background:#FFFFFF;margin:18px 0;
+  box-shadow:0 4px 18px rgba(16,24,40,.035);
+}
+.case-card{
+  border:1px solid #E6EAF0;border-radius:22px;padding:18px 20px;background:#FFFFFF;margin-bottom:12px;
+  box-shadow:0 8px 28px rgba(16,24,40,.045);
+}
+.case-card:hover{box-shadow:0 12px 34px rgba(16,24,40,.075);border-color:#D0D5DD;}
+.case-top{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;}
+.case-left{display:flex;align-items:flex-start;gap:14px;min-width:0;}
+.case-dot{width:13px;height:13px;border-radius:50%;margin-top:5px;flex-shrink:0;}
+.case-dot-red{background:#F04438}.case-dot-yellow{background:#F79009}.case-dot-blue{background:#2E90FA}.case-dot-green{background:#12B76A}.case-dot-gray{background:#98A2B3}
+.case-title{font-size:17px;font-weight:850;color:#101828;letter-spacing:-.01em;}
+.case-sub{font-size:13px;color:#667085;line-height:1.45;margin-top:4px;}
+.case-meta{font-size:12px;color:#98A2B3;line-height:1.45;margin-top:7px;}
+.case-badges{text-align:right;min-width:260px;}
+.ux-pill{display:inline-flex;align-items:center;font-size:11px;font-weight:800;padding:5px 9px;border-radius:999px;margin:2px 3px;white-space:nowrap;}
+.ux-pill-red{background:#FEE4E2;color:#B42318}.ux-pill-yellow{background:#FEF0C7;color:#B54708}
+.ux-pill-blue{background:#D1E9FF;color:#175CD3}.ux-pill-green{background:#D1FADF;color:#027A48}
+.ux-pill-gray{background:#F2F4F7;color:#475467}.ux-pill-dark{background:#101828;color:#FFFFFF}
+
+.audit-card{
+  border:1px solid #E6EAF0;border-radius:16px;padding:14px 16px;margin-bottom:10px;background:#FFFFFF;
+  box-shadow:0 3px 14px rgba(16,24,40,.025);
+}
+.audit-card-red{border-left:5px solid #F04438}.audit-card-yellow{border-left:5px solid #F79009}
+.audit-card-blue{border-left:5px solid #2E90FA}.audit-card-green{border-left:5px solid #12B76A}.audit-card-gray{border-left:5px solid #98A2B3}
+.audit-card-head{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;margin-bottom:6px;}
+.audit-card-title{font-size:14px;font-weight:850;color:#101828;}
+.audit-card-result{font-size:12px;line-height:1.48;color:#667085;margin-top:4px;}
+.audit-card-note{font-size:12px;line-height:1.48;color:#475467;background:#F8FAFC;border-radius:10px;padding:9px 11px;margin-top:9px;}
+.cat-title{font-size:12px;font-weight:850;text-transform:uppercase;letter-spacing:.07em;color:#667085;margin:18px 0 8px;padding-bottom:6px;border-bottom:1px solid #EEF2F6;}
+.section-title-red{color:#B42318}.section-title-yellow{color:#B54708}.section-title-blue{color:#175CD3}.section-title-green{color:#027A48}.section-title-gray{color:#475467}
+.finding-box{border-left:4px solid;padding:10px 12px;border-radius:0 10px 10px 0;font-size:13px;margin-bottom:8px;line-height:1.5;}
+.finding-err{border-color:#F04438;background:#FEF3F2;color:#B42318}.finding-warn{border-color:#F79009;background:#FFFAEB;color:#B54708}
+.finding-blue{border-color:#2E90FA;background:#EFF8FF;color:#175CD3}.finding-ok{border-color:#12B76A;background:#ECFDF3;color:#027A48}.finding-gray{border-color:#98A2B3;background:#F8FAFC;color:#475467}
+.ev-table{width:100%;border-collapse:collapse;font-size:12px;background:#FFFFFF;border:1px solid #EEF2F6;border-radius:10px;overflow:hidden;}
+.ev-table th{text-align:left;padding:8px 10px;background:#F8FAFC;border-bottom:1px solid #EEF2F6;font-weight:800;color:#475467;}
+.ev-table td{padding:8px 10px;border-bottom:1px solid #F2F4F7;color:#344054;vertical-align:top;}
+.ev-table tr:last-child td{border-bottom:none;}
+.mono{font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;font-size:11px;}
+.muted-small{font-size:11px;color:#98A2B3;}
+.config-note{font-size:13px;color:#667085;line-height:1.55;background:#F8FAFC;border:1px solid #EEF2F6;border-radius:14px;padding:12px;margin-bottom:12px;}
+
+@media(max-width:900px){
+  .nch-header{flex-direction:column;align-items:flex-start}.nch-header-right{text-align:left}.case-top{flex-direction:column}.case-badges{text-align:left;min-width:0}.empty-grid{grid-template-columns:1fr}
+}
+</style>
+""", unsafe_allow_html=True)
+
+
+def _ui_kpi(label: str, value: str, sub: str = "", tone: str = ""):
+    tone_cls = f" kpi-{tone}" if tone else ""
     st.markdown(
-        "**Documentos reconocidos:**\n"
-        "- Estado de cuenta (cualquier corte)\n"
-        "- Servicios de cirugía\n"
-        "- Nota post-quirúrgica"
-    )
-    st.markdown("---")
-    st.markdown(
-        "**Categorías auditadas:**\n"
-        "- Validación de tiempos (hora total, minuto 21)\n"
-        "- Consistencia de servicios (sala vs O₂, trío recuperación)\n"
-        "- Oxígeno (QX vs sala, recuperación, hosp.)\n"
-        "- Sala quirúrgica (horas, sevoflurano)\n"
-        "- Equipos y servicios (binarios)\n"
-        "- Accesorios complementarios (bidireccionales)\n"
-        "- Verificaciones negativas\n"
-        "- Estancia (habitación, bomba, dietas, RPBI)"
+        f'<div class="kpi-card{tone_cls}"><div class="kpi-label">{h(label)}</div>'
+        f'<div class="kpi-value">{h(value)}</div>'
+        f'<div class="kpi-sub">{h(sub)}</div></div>',
+        unsafe_allow_html=True,
     )
 
-# =========================================================
-# ENCABEZADO
-# =========================================================
-st.title("🏥 Auditor Hospitalario")
+
+def _ui_groups(auds: list) -> dict:
+    financieros = [a for a in auds if _ui_audit_is_financiero(a)]
+    catalogo = [a for a in auds if _ui_audit_is_catalogo(a) and a.get("clase") in ("err", "warn")]
+    operativos = [a for a in auds if _ui_audit_is_operativo(a)]
+    ok = [a for a in auds if a.get("clase") == "ok"]
+    informativos = [a for a in auds if a.get("clase") == "gray" and not _ui_audit_is_catalogo(a)]
+    return {"financieros": financieros, "operativos": operativos, "catalogo": catalogo, "ok": ok, "informativos": informativos}
+
+
+def _ui_count(auds: list) -> dict:
+    g = _ui_groups(auds)
+    return {k: len(v) for k, v in g.items()}
+
+
+def _ui_riesgo(auds: list):
+    c = _ui_count(auds)
+    if c["financieros"] > 0:
+        return "Alto", "red", "Puede impactar cuenta o cobro"
+    if c["operativos"] > 0:
+        return "Medio", "yellow", "Requiere confirmación operativa"
+    if c["catalogo"] > 0:
+        return "Catálogo", "blue", "Revisar códigos con sistemas/Jordan"
+    if c["ok"] > 0:
+        return "Bajo", "green", "Sin hallazgos relevantes"
+    return "Sin referencias", "gray", "Sin evidencia suficiente"
+
+
+def _ui_money(auds: list) -> float:
+    return sum(a.get("monto_diff") or 0 for a in auds if a.get("clase") in ("err", "warn") and a.get("monto_diff"))
+
+
+def _ui_pill(txt: str, cls: str) -> str:
+    return f'<span class="ux-pill ux-pill-{cls}">{h(txt)}</span>'
+
+
+def _ui_format_num(v, unidad=""):
+    if v is None:
+        return "—"
+    try:
+        txt = f"{v:.2f}" if isinstance(v, float) else str(v)
+    except Exception:
+        txt = str(v)
+    return f"{txt} {unidad}".strip()
+
+
+def _ui_audit_card_class(audit: dict) -> str:
+    if _ui_audit_is_catalogo(audit):
+        return "blue"
+    if audit.get("clase") == "err":
+        return "red"
+    if audit.get("clase") == "warn":
+        return "yellow"
+    if audit.get("clase") == "ok":
+        return "green"
+    return "gray"
+
+
+def _ui_trace_catalogo_rows() -> list:
+    rows = []
+    for regla in CATALOGO_ALERTAS_DEF:
+        codigos = regla.get("codigos", set()) or set()
+        excluidos = regla.get("excluir_codigos", set()) or set()
+        rows.append({
+            "Concepto": regla.get("label", regla.get("key", "")),
+            "Área": regla.get("area") or "Todas",
+            "Códigos válidos": ", ".join(sorted(str(c) for c in codigos)) or "—",
+            "Códigos excluidos": ", ".join(sorted(str(c) for c in excluidos)) or "—",
+            "Patrones de alerta": ", ".join(regla.get("patrones_desc", [])) or "—",
+        })
+    return rows
+
+
+def _ui_audit_trace_row(a: dict) -> dict:
+    key = str(a.get("key", ""))
+    codigos = "—"
+    patrones = "—"
+    area = "Según regla"
+
+    # Alertas de catálogo: key viene como catalogo_<concepto>_<codigo>
+    for regla in CATALOGO_ALERTAS_DEF:
+        rkey = regla.get("key", "")
+        if key == rkey or key.startswith(f"catalogo_{rkey}_"):
+            codigos = ", ".join(sorted(str(c) for c in (regla.get("codigos", set()) or set()))) or "—"
+            patrones = ", ".join(regla.get("patrones_desc", [])) or "—"
+            area = regla.get("area") or "Todas"
+            break
+
+    # Binarios de servicios de cirugía.
+    if codigos == "—":
+        for bkey, _label, patron, codigos_def, area_def in SERVICIOS_BINARIOS_DEF:
+            if key == f"bin_{bkey}" or key == bkey:
+                codigos = ", ".join(sorted(str(c) for c in codigos_def)) or "—"
+                patrones = patron
+                area = area_def or "Todas"
+                break
+
+    return {
+        "Auditoría": a.get("label", ""),
+        "Categoría": a.get("categoria", ""),
+        "Tipo": a.get("tipo", ""),
+        "Clave interna": key,
+        "Área": area,
+        "Códigos usados": codigos,
+        "Patrón documental / alerta": patrones,
+        "Resultado": a.get("status", ""),
+    }
+
+
+@st.dialog("Configuración", width="large")
+def mostrar_configuracion():
+    st.markdown("### Configuración de auditoría")
+    st.markdown(
+        '<div class="config-note">La configuración vive oculta para que la pantalla principal se mantenga ejecutiva. '
+        'Cambiar la tolerancia recalcula las validaciones al volver a correr la app.</div>',
+        unsafe_allow_html=True,
+    )
+    nueva_tol = st.slider(
+        "Tolerancia (hrs / ml / días)",
+        0.0, 1.0, float(st.session_state.get("tolerancia_ui", 0.01)), 0.01,
+        help="Diferencia mínima para marcar una discrepancia.",
+        key="cfg_tolerancia_slider",
+    )
+    col_a, col_b = st.columns([1, 3])
+    with col_a:
+        if st.button("Aplicar", type="primary", use_container_width=True):
+            st.session_state["tolerancia_ui"] = float(nueva_tol)
+            st.rerun()
+    with col_b:
+        st.caption(f"Tolerancia actual en uso: {float(st.session_state.get('tolerancia_ui', 0.01)):.2f}")
+
+    st.markdown("#### Documentos reconocidos")
+    st.markdown("- Estado de cuenta, cualquier corte\n- Servicios de cirugía\n- Nota post-quirúrgica")
+    st.markdown("#### Categorías auditadas")
+    st.markdown(
+        "- Validación de tiempos y minuto 21\n"
+        "- Consistencia de servicios contra estado de cuenta\n"
+        "- Oxígeno, sala quirúrgica, recuperación y estancia\n"
+        "- Equipos, accesorios, códigos monitoreados y alertas de catálogo\n"
+        "- RPBI, habitación, bomba, dietas y validaciones negativas"
+    )
+
+
+@st.dialog("Reglas y códigos auditados", width="large")
+def mostrar_reglas_codigos():
+    st.markdown("### Códigos monitoreados")
+    st.markdown(
+        '<div class="config-note">Esta vista es informativa. La herramienta valida cargos por código. '
+        'La descripción solo genera alertas para detectar posibles códigos nuevos.</div>',
+        unsafe_allow_html=True,
+    )
+    df_cat = pd.DataFrame(_ui_trace_catalogo_rows())
+    st.dataframe(df_cat, use_container_width=True, hide_index=True)
+
+    st.markdown("### Servicios binarios documentados en hoja de servicios")
+    rows = []
+    for key, label, patron, codigos, area in SERVICIOS_BINARIOS_DEF:
+        rows.append({
+            "Servicio": label,
+            "Clave": key,
+            "Área de cobro": area,
+            "Códigos esperados": ", ".join(sorted(str(c) for c in codigos)),
+            "Patrón en hoja": patron,
+        })
+    st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+
+def render_auditoria(audit: dict):
+    """Render visual. Solo presentación; no modifica reglas ni cálculos."""
+    tipo = audit.get("tipo", "")
+    label = audit.get("label", "Auditoría")
+    status = audit.get("status", "")
+    unidad = audit.get("unidad", "")
+    card_cls = _ui_audit_card_class(audit)
+
+    if _ui_audit_is_catalogo(audit):
+        badge = _ui_pill("Catálogo / sistemas", "blue")
+    elif audit.get("clase") == "err":
+        badge = _ui_pill("Crítico", "red")
+    elif audit.get("clase") == "warn":
+        badge = _ui_pill("Revisar", "yellow")
+    elif audit.get("clase") == "ok":
+        badge = _ui_pill("OK", "green")
+    else:
+        badge = _ui_pill("Informativo", "gray")
+
+    if tipo == "numerico":
+        detalle = (
+            f"Cobrado: <b>{h(_ui_format_num(audit.get('cobrado'), unidad))}</b> · "
+            f"Esperado: <b>{h(_ui_format_num(audit.get('esperado'), unidad))}</b>"
+        )
+        monto = audit.get("monto_diff")
+        if monto is not None and monto >= 1:
+            diff = audit.get("diff", 0) or 0
+            etiqueta = "sobrecobro" if diff > 0 else "faltante"
+            detalle += f" · <b>≈ ${monto:,.0f} {h(etiqueta)}</b>"
+    elif tipo == "binario":
+        detalle = (
+            f"Servicios de cirugía: <b>{'marcado' if audit.get('marcado') else 'no marcado'}</b> · "
+            f"Estado de cuenta: <b>{'cobrado' if audit.get('cobrado_bool') else 'no cobrado'}</b>"
+        )
+    elif tipo == "negativo":
+        detalle = f"Cargos encontrados en estado de cuenta: <b>{int(audit.get('cobrado') or 0)}</b>"
+    else:
+        detalle = h(status)
+
+    nota = audit.get("nota_auditoria")
+    nota_html = f'<div class="audit-card-note">{h(nota)}</div>' if nota else ""
+
+    st.markdown(
+        f'<div class="audit-card audit-card-{card_cls}">'
+        f'<div class="audit-card-head">'
+        f'<div><div class="audit-card-title">{h(label)}</div>'
+        f'<div class="audit-card-result"><b>Resultado:</b> {h(status)}</div></div>'
+        f'<div>{badge}</div>'
+        f'</div>'
+        f'<div class="audit-card-result">{detalle}</div>'
+        f'{nota_html}'
+        f'</div>',
+        unsafe_allow_html=True,
+    )
+
+
+def render_evidencia_audit(audit: dict):
+    items_cob = audit.get("items_cobrados", [])
+    items_esp = audit.get("items_esperados", [])
+    if not items_cob and not items_esp:
+        st.caption("Sin evidencia tabular asociada a esta validación.")
+        return
+    if items_esp:
+        st.markdown("**Esperado / documentado**")
+        render_tabla_items(items_esp, COLS_ESPERADO)
+    if items_cob:
+        st.markdown("**Cobrado en estado de cuenta**")
+        render_tabla_items(items_cob, COLS_COBRO)
+
+
+def render_grupo_auditorias(titulo: str, descripcion: str, auds: list, color: str, empty_msg: str = "Sin hallazgos."):
+    total = len(auds)
+    st.markdown(
+        f'<div class="cat-title section-title-{h(color)}">{h(titulo)} '
+        f'<span style="font-weight:500;text-transform:none;letter-spacing:0">· {total}</span></div>',
+        unsafe_allow_html=True,
+    )
+    if descripcion:
+        st.caption(descripcion)
+    if not auds:
+        st.markdown(f'<div class="finding-box finding-gray">{h(empty_msg)}</div>', unsafe_allow_html=True)
+        return
+    for audit in auds:
+        render_auditoria(audit)
+
+
+def render_header():
+    st.markdown(
+        f"""
+        <div class="nch-header">
+          <div class="nch-brand">
+            <div class="nch-logo-wrap"><img class="nch-logo" src="{LOGO_NCH_URL}" /></div>
+            <div>
+              <div class="nch-eyebrow">NewCity Hospital · Auditoría</div>
+              <div class="nch-title">Auditor Hospitalario</div>
+              <div class="nch-subtitle">Preauditoría automática de cuentas hospitalarias: cruza estado de cuenta, servicios de cirugía y nota post-quirúrgica para priorizar hallazgos.</div>
+            </div>
+          </div>
+          <div class="nch-header-right">
+            <div class="nch-status"><span class="nch-status-dot"></span>Motor activo</div>
+            <div class="nch-version">Frontend v3 · reglas intactas</div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+render_header()
+
+acol1, acol2, acol3, acol4 = st.columns([3.5, 1, 1, 1])
+with acol1:
+    st.markdown('<div class="action-help">Carga los PDFs y revisa primero las cuentas con impacto financiero, operativo o de catálogo.</div>', unsafe_allow_html=True)
+with acol2:
+    if st.button("⚙️ Configuración", use_container_width=True):
+        mostrar_configuracion()
+with acol3:
+    if st.button("📚 Reglas", use_container_width=True):
+        mostrar_reglas_codigos()
+with acol4:
+    st.button("📥 Exportar", use_container_width=True, disabled=True, help="Disponible después de cargar documentos.")
+
 st.markdown(
-    "Sube los PDFs de la cuenta. El sistema cruza automáticamente "
-    "el **estado de cuenta** contra los **servicios de cirugía** y la **nota post-quirúrgica**."
+    '<div class="upload-shell"><div class="upload-title">Carga de documentos</div>'
+    '<div class="upload-sub">Sube estado de cuenta, servicios de cirugía y nota post-quirúrgica. Puedes cargar una o varias cuentas al mismo tiempo.</div></div>',
+    unsafe_allow_html=True,
 )
 
 archivos_subidos = st.file_uploader(
     "Selecciona los documentos PDF",
     type=["pdf"],
     accept_multiple_files=True,
+    label_visibility="collapsed",
 )
 
 if not archivos_subidos:
-    st.info("Sube uno o más archivos PDF para comenzar.")
+    st.markdown(
+        """
+        <div class="empty-state">
+          <div class="empty-title">Listo para auditar cuentas hospitalarias</div>
+          <div class="empty-sub">La pantalla principal muestra solo lo necesario para tomar decisiones. La configuración, códigos y trazabilidad quedan ocultos en modales informativos.</div>
+          <div class="empty-grid">
+            <div class="empty-card"><div class="empty-card-title">1. Prioriza cuentas</div><div class="empty-card-sub">Identifica rápidamente qué cuenta requiere revisión y por qué.</div></div>
+            <div class="empty-card"><div class="empty-card-title">2. Separa hallazgos</div><div class="empty-card-sub">Distingue diferencias financieras, validaciones operativas y alertas de catálogo.</div></div>
+            <div class="empty-card"><div class="empty-card-title">3. Revisa evidencia</div><div class="empty-card-sub">Abre el detalle solo cuando el auditor necesita validar códigos, cantidades o documentos.</div></div>
+          </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
     st.stop()
 
 archivos_bytes = [(f.name, f.read()) for f in archivos_subidos]
@@ -2776,12 +3201,8 @@ with st.spinner("Analizando documentos…"):
 # =========================================================
 # MÉTRICAS GLOBALES
 # =========================================================
-todas_auditorias = {
-    cta: construir_auditorias(data, tolerancia_ui)
-    for cta, data in cuentas.items()
-}
+todas_auditorias = {cta: construir_auditorias(data, tolerancia_ui) for cta, data in cuentas.items()}
 
-# ── Log por email ─────────────────────────────────────────
 _hash_actual = _hash_archivos(archivos_bytes)
 if st.session_state.get("_ultimo_log_enviado") != _hash_actual:
     _enviar_log_email(cuentas, todas_auditorias, archivos_bytes)
@@ -2794,166 +3215,146 @@ total_financieros = sum(len(_ui_groups(auds)["financieros"]) for auds in todas_a
 total_operativos = sum(len(_ui_groups(auds)["operativos"]) for auds in todas_auditorias.values())
 total_catalogo = sum(len(_ui_groups(auds)["catalogo"]) for auds in todas_auditorias.values())
 total_ok = sum(len(_ui_groups(auds)["ok"]) for auds in todas_auditorias.values())
-cuentas_atencion = sum(
-    1 for auds in todas_auditorias.values()
-    if len(_ui_groups(auds)["financieros"]) or len(_ui_groups(auds)["operativos"]) or len(_ui_groups(auds)["catalogo"])
-)
+cuentas_atencion = sum(1 for auds in todas_auditorias.values() if len(_ui_groups(auds)["financieros"]) or len(_ui_groups(auds)["operativos"]) or len(_ui_groups(auds)["catalogo"]))
 monto_global = sum(_ui_money(auds) for auds in todas_auditorias.values())
 
-st.markdown("### Resumen del lote")
-c1, c2, c3, c4, c5, c6 = st.columns(6)
-with c1:
-    _ui_kpi("Cuentas", str(total_cuentas), f"{len(archivos_bytes)} archivo(s)")
-with c2:
-    _ui_kpi("A revisar", str(cuentas_atencion), "Cuentas con atención")
-with c3:
-    _ui_kpi("Financieros", str(total_financieros), "Diferencias de cuenta")
-with c4:
-    _ui_kpi("Operativos", str(total_operativos), "Confirmar con área")
-with c5:
-    _ui_kpi("Catálogo", str(total_catalogo), "Avisar a Jordan/sistemas")
-with c6:
-    _ui_kpi("Monto", f"≈ ${monto_global:,.0f}", "Hallazgos estimados")
+st.markdown('<div class="executive-title">Resumen ejecutivo del lote</div>', unsafe_allow_html=True)
+st.markdown('<div class="executive-sub">Vista rápida para decidir qué cuenta revisar primero.</div>', unsafe_allow_html=True)
 
-st.caption(
-    f"Auditoría generada: {_ts_auditoria} · "
-    f"Hash de archivos: `{_hash_actual[:12]}…` · "
-    f"Validaciones OK: {total_ok}"
+k1, k2, k3, k4, k5, k6 = st.columns(6)
+with k1:
+    _ui_kpi("Cuentas", str(total_cuentas), f"{len(archivos_bytes)} archivo(s)")
+with k2:
+    _ui_kpi("A revisar", str(cuentas_atencion), "Cuentas con atención", "yellow" if cuentas_atencion else "green")
+with k3:
+    _ui_kpi("Financieros", str(total_financieros), "Impacto en cuenta", "red" if total_financieros else "green")
+with k4:
+    _ui_kpi("Operativos", str(total_operativos), "Confirmar con área", "yellow" if total_operativos else "green")
+with k5:
+    _ui_kpi("Catálogo", str(total_catalogo), "Avisar a Jordan/sistemas", "blue" if total_catalogo else "green")
+with k6:
+    _ui_kpi("Monto", f"≈ ${monto_global:,.0f}", "Hallazgos estimados", "red" if monto_global else "green")
+
+st.markdown(
+    f'<div class="audit-meta-line">Auditoría generada: {h(_ts_auditoria)} · Hash de archivos: <code>{h(_hash_actual[:12])}…</code> · Validaciones OK: {total_ok} · Tolerancia: {tolerancia_ui:.2f}</div>',
+    unsafe_allow_html=True,
 )
 
-st.divider()
-# =========================================================
-# DIALOG POPUP PARA DETALLE DE CUENTA
-# =========================================================
-@st.dialog("Detalle de cuenta", width="large")
+# Rehabilitar botón visual de exportar mediante sección inferior; Streamlit no permite actualizar el botón del header ya dibujado.
+
+@st.dialog("Detalle de auditoría", width="large")
 def mostrar_detalle(cuenta_key: str):
-    """Muestra el detalle completo de una cuenta en un popup modal."""
     data = cuentas[cuenta_key]
     auds = todas_auditorias[cuenta_key]
     grupos = _ui_groups(auds)
     riesgo_txt, riesgo_cls, riesgo_desc = _ui_riesgo(auds)
-
-    seguro_label = data.get("seguro", "")
     monto_total = _ui_money(auds)
+    seguro_label = data.get("seguro", "") or "No identificado"
 
     st.markdown(
-        f'<div class="ux-card">'
-        f'<div class="ux-card-top">'
-        f'<div><div class="ux-title">{h(cuenta_key)} — {h(data["paciente"] or "No identificado")}</div>'
-        f'<div class="ux-subtitle">Pagador: {h(seguro_label or "No identificado")}</div>'
-        f'<div class="ux-meta">Ingreso {h(data.get("fecha_ingreso", "?"))} → '
-        f'Egreso {h(data.get("fecha_egreso", "?"))} · {h(data.get("dias_estancia", "?"))} día(s)</div></div>'
-        f'<div class="account-badges">{_ui_pill(riesgo_txt, "red" if riesgo_cls=="err" else "yellow" if riesgo_cls=="warn" else "blue" if riesgo_cls=="blue" else "green" if riesgo_cls=="ok" else "gray")}'
-        f'<div class="muted-small">{h(riesgo_desc)}</div></div>'
-        f'</div></div>',
+        f'<div class="case-card">'
+        f'<div class="case-top"><div class="case-left"><span class="case-dot case-dot-{riesgo_cls}"></span>'
+        f'<div><div class="case-title">{h(cuenta_key)} · {h(data["paciente"] or "No identificado")}</div>'
+        f'<div class="case-sub">Pagador: {h(seguro_label)}</div>'
+        f'<div class="case-meta">Ingreso {h(data.get("fecha_ingreso", "?"))} → Egreso {h(data.get("fecha_egreso", "?"))} · {h(data.get("dias_estancia", "?"))} día(s)</div></div></div>'
+        f'<div class="case-badges">{_ui_pill(riesgo_txt, riesgo_cls)}<br><span class="muted-small">{h(riesgo_desc)}</span></div></div>'
+        f'</div>',
         unsafe_allow_html=True,
     )
 
-    c1, c2, c3, c4 = st.columns(4)
-    with c1:
-        _ui_kpi("Financieros", str(len(grupos["financieros"])), f"≈ ${monto_total:,.0f}")
-    with c2:
-        _ui_kpi("Operativos", str(len(grupos["operativos"])), "Confirmación humana")
-    with c3:
-        _ui_kpi("Catálogo", str(len(grupos["catalogo"])), "Jordan / sistemas")
-    with c4:
-        _ui_kpi("OK", str(len(grupos["ok"])), "Ocultas por defecto")
+    d1, d2, d3, d4 = st.columns(4)
+    with d1:
+        _ui_kpi("Financieros", str(len(grupos["financieros"])), f"≈ ${monto_total:,.0f}", "red" if grupos["financieros"] else "green")
+    with d2:
+        _ui_kpi("Operativos", str(len(grupos["operativos"])), "Confirmación humana", "yellow" if grupos["operativos"] else "green")
+    with d3:
+        _ui_kpi("Catálogo", str(len(grupos["catalogo"])), "Jordan / sistemas", "blue" if grupos["catalogo"] else "green")
+    with d4:
+        _ui_kpi("OK", str(len(grupos["ok"])), "Ocultas por defecto", "green")
 
-    st.markdown("---")
+    tab_resumen, tab_hallazgos, tab_evidencia, tab_traza, tab_docs = st.tabs(["Resumen", "Hallazgos", "Evidencia", "Cómo auditó", "Documentos"])
 
-    render_grupo_auditorias(
-        "🔴 Hallazgos financieros / diferencias de cuenta",
-        "Cargos faltantes, sobrantes o diferencias numéricas que pueden impactar la cuenta.",
-        grupos["financieros"],
-        "red",
-        "No hay diferencias financieras relevantes en esta cuenta.",
-    )
+    with tab_resumen:
+        st.markdown("### Resumen de la cuenta")
+        resumen_rows = [
+            {"Campo": "Cuenta", "Valor": cuenta_key},
+            {"Campo": "Paciente", "Valor": data.get("paciente") or "No identificado"},
+            {"Campo": "Pagador", "Valor": seguro_label},
+            {"Campo": "Riesgo", "Valor": f"{riesgo_txt} — {riesgo_desc}"},
+            {"Campo": "Archivos procesados", "Valor": str(len(data.get("archivos", [])))},
+            {"Campo": "Monto estimado", "Valor": f"≈ ${monto_total:,.0f}"},
+        ]
+        st.dataframe(pd.DataFrame(resumen_rows), use_container_width=True, hide_index=True)
+        if grupos["financieros"] or grupos["operativos"] or grupos["catalogo"]:
+            st.warning("Esta cuenta tiene puntos que requieren revisión antes de cerrarse.")
+        else:
+            st.success("No se detectaron hallazgos relevantes para revisión.")
 
-    render_grupo_auditorias(
-        "🟡 Validaciones operativas",
-        "Puntos que requieren confirmación con enfermería, almacén, quirófano o área médica antes de cerrar.",
-        grupos["operativos"],
-        "yellow",
-        "No hay validaciones operativas pendientes.",
-    )
+    with tab_hallazgos:
+        render_grupo_auditorias("🔴 Hallazgos financieros", "Diferencias que pueden impactar el cargo o cobro.", grupos["financieros"], "red", "No hay diferencias financieras relevantes.")
+        render_grupo_auditorias("🟡 Validaciones operativas", "Requieren confirmación con enfermería, almacén, quirófano o área médica.", grupos["operativos"], "yellow", "No hay validaciones operativas pendientes.")
+        render_grupo_auditorias("🔵 Alertas de catálogo / sistemas", "Códigos potencialmente nuevos. No cierran validaciones hasta actualizar catálogo.", grupos["catalogo"], "blue", "No hay alertas de catálogo.")
+        if grupos["informativos"]:
+            with st.expander(f"ℹ️ Informativos ({len(grupos['informativos'])})", expanded=False):
+                for a in grupos["informativos"]:
+                    render_auditoria(a)
+        if grupos["ok"]:
+            with st.expander(f"🟢 Validaciones correctas ({len(grupos['ok'])})", expanded=False):
+                for a in grupos["ok"]:
+                    render_auditoria(a)
 
-    render_grupo_auditorias(
-        "🔵 Alertas de catálogo / sistemas",
-        "Posibles códigos nuevos detectados por descripción. No se usan para cerrar validaciones hasta actualizar catálogo.",
-        grupos["catalogo"],
-        "blue",
-        "No hay alertas de catálogo.",
-    )
+    with tab_evidencia:
+        st.markdown("### Evidencia trazada por validación")
+        auds_con_evidencia = [a for a in auds if a.get("items_cobrados") or a.get("items_esperados")]
+        if not auds_con_evidencia:
+            st.info("No hay evidencia tabular asociada a las validaciones de esta cuenta.")
+        for a in auds_con_evidencia:
+            with st.expander(f"{a.get('label', 'Auditoría')} — {a.get('status', '')}", expanded=False):
+                render_evidencia_audit(a)
 
-    mostrar_info = False
-    if grupos["informativos"]:
-        mostrar_info = st.checkbox(
-            f"Mostrar {len(grupos['informativos'])} aviso(s) informativo(s)",
-            value=False,
-            key=f"chk_info_{cuenta_key}",
-        )
-    if mostrar_info:
-        render_grupo_auditorias(
-            "ℹ️ Informativos",
-            "Avisos documentales o validaciones sin diferencia financiera automática.",
-            grupos["informativos"],
-            "gray",
-        )
+    with tab_traza:
+        st.markdown("### Cómo auditó esta cuenta")
+        st.caption("Trazabilidad informativa: muestra claves internas, códigos buscados, área y resultado. No modifica ninguna regla.")
+        df_trace = pd.DataFrame([_ui_audit_trace_row(a) for a in auds])
+        st.dataframe(df_trace, use_container_width=True, hide_index=True)
 
-    mostrar_ok = False
-    if grupos["ok"]:
-        mostrar_ok = st.checkbox(
-            f"Mostrar {len(grupos['ok'])} validación(es) correcta(s)",
-            value=False,
-            key=f"chk_ok_{cuenta_key}",
-        )
-    if mostrar_ok:
-        render_grupo_auditorias(
-            "🟢 Validaciones correctas",
-            "Reglas que pasaron correctamente.",
-            grupos["ok"],
-            "green",
-        )
-
-    st.markdown('<div class="cat-title">Archivos procesados</div>', unsafe_allow_html=True)
-    for af in data["archivos"]:
-        tipo_label = {
-            "servicios_cirugia": "Servicios de cirugía",
-            "nota_postquirurgica": "Nota post-quirúrgica",
-            "otro": "Tipo no reconocido",
-        }.get(af["tipo_documento"],
-              af["tipo_documento"].replace("estado_cuenta_", "Estado de cuenta — corte "))
-        st.markdown(f"- `{af['archivo']}` → {tipo_label}")
+    with tab_docs:
+        st.markdown("### Documentos procesados")
+        rows = []
+        for af in data["archivos"]:
+            tipo_label = {
+                "servicios_cirugia": "Servicios de cirugía",
+                "nota_postquirurgica": "Nota post-quirúrgica",
+                "otro": "Tipo no reconocido",
+            }.get(af["tipo_documento"], af["tipo_documento"].replace("estado_cuenta_", "Estado de cuenta — corte "))
+            rows.append({"Archivo": af["archivo"], "Tipo detectado": tipo_label})
+        st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
 
     st.divider()
-    html_reporte = _construir_html_reporte_cuenta(
-        cuenta_key, data, auds, _hash_actual)
+    html_reporte = _construir_html_reporte_cuenta(cuenta_key, data, auds, _hash_actual)
     st.download_button(
         "📥 Descargar reporte de esta cuenta (HTML)",
         data=html_reporte.encode("utf-8"),
         file_name=f"auditoria_{cuenta_key}.html",
         mime="text/html",
         key=f"dl_reporte_{cuenta_key}",
+        use_container_width=True,
     )
 
 
-# =========================================================
-# LISTA DE CUENTAS
-# =========================================================
-st.subheader("Cuentas analizadas")
-st.caption("Ordenadas por prioridad para que el auditor revise primero lo que puede impactar cuenta, operación o catálogo.")
+st.markdown('<div class="executive-title">Cuentas analizadas</div>', unsafe_allow_html=True)
+st.markdown('<div class="executive-sub">Ordenadas por prioridad para que el auditor revise primero lo que puede impactar cuenta, operación o catálogo.</div>', unsafe_allow_html=True)
 
-fcol1, fcol2, fcol3 = st.columns([2, 2, 1])
-with fcol1:
-    filtro_busqueda = st.text_input("Buscar cuenta o paciente", "", placeholder="Ej. NC13377 o Blank")
-with fcol2:
-    filtro_tipo = st.selectbox(
-        "Filtrar por atención",
-        ["Todas", "Financieros", "Operativos", "Catálogo", "Sin hallazgos"],
-        index=0,
-    )
-with fcol3:
-    solo_pendientes = st.toggle("Solo pendientes", value=False)
+with st.container():
+    st.markdown('<div class="filter-card">', unsafe_allow_html=True)
+    fcol1, fcol2, fcol3 = st.columns([2.2, 2, 1])
+    with fcol1:
+        filtro_busqueda = st.text_input("Buscar cuenta o paciente", "", placeholder="Ej. NC13377 o Blank")
+    with fcol2:
+        filtro_tipo = st.selectbox("Filtrar por atención", ["Todas", "Financieros", "Operativos", "Catálogo", "Sin hallazgos"], index=0)
+    with fcol3:
+        solo_pendientes = st.toggle("Solo pendientes", value=False)
+    st.markdown('</div>', unsafe_allow_html=True)
 
 
 def _orden_urgencia(item):
@@ -2984,6 +3385,7 @@ def _pasa_filtros(cuenta: str, data: dict) -> bool:
         return False
     return True
 
+
 cuentas_ordenadas = [item for item in sorted(cuentas.items(), key=_orden_urgencia) if _pasa_filtros(item[0], item[1])]
 
 if not cuentas_ordenadas:
@@ -2994,9 +3396,6 @@ for cuenta, data in cuentas_ordenadas:
     grupos = _ui_groups(auds)
     riesgo_txt, riesgo_cls, riesgo_desc = _ui_riesgo(auds)
     monto_total = _ui_money(auds)
-
-    cls_map = {"err": "red", "warn": "yellow", "blue": "blue", "ok": "green", "gray": "gray"}
-    risk_pill_cls = cls_map.get(riesgo_cls, "gray")
 
     pills = ""
     if grupos["financieros"]:
@@ -3013,27 +3412,31 @@ for cuenta, data in cuentas_ordenadas:
     seguro_label = data.get("seguro", "") or "No identificado"
     archivos_txt = f"{len(data['archivos'])} archivo(s)"
 
-    col_card, col_btn = st.columns([6, 1])
+    col_card, col_btn = st.columns([6, 1.1])
     with col_card:
         st.markdown(
-            f'<div class="account-row">'
-            f'<div class="account-row-head">'
-            f'<div class="account-main">{dot_html(riesgo_cls if riesgo_cls in ("err","warn","ok","gray") else "blue")}'
-            f'<div><div class="account-title">{h(cuenta)} · {h(data["paciente"] or "No identificado")}</div>'
-            f'<div class="account-sub">Pagador: {h(seguro_label)} · {h(archivos_txt)} · {h(riesgo_desc)}</div></div></div>'
-            f'<div class="account-badges">{_ui_pill(riesgo_txt, risk_pill_cls)}<br>{pills}</div>'
-            f'</div></div>',
+            f'<div class="case-card">'
+            f'<div class="case-top"><div class="case-left"><span class="case-dot case-dot-{riesgo_cls}"></span>'
+            f'<div><div class="case-title">{h(cuenta)} · {h(data["paciente"] or "No identificado")}</div>'
+            f'<div class="case-sub">Pagador: {h(seguro_label)} · {h(archivos_txt)}</div>'
+            f'<div class="case-meta">{h(riesgo_desc)}</div></div></div>'
+            f'<div class="case-badges">{_ui_pill(riesgo_txt, riesgo_cls)}<br>{pills}</div></div>'
+            f'</div>',
             unsafe_allow_html=True,
         )
     with col_btn:
-        if st.button("Revisar", key=f"btn_detalle_{cuenta}", use_container_width=True):
+        st.write("")
+        st.write("")
+        if st.button("Revisar", key=f"btn_detalle_{cuenta}", type="primary", use_container_width=True):
             mostrar_detalle(cuenta)
 
 st.divider()
+
 # =========================================================
 # EXPORTAR
 # =========================================================
-st.subheader("📥 Exportar")
+st.markdown('<div class="executive-title">Exportar</div>', unsafe_allow_html=True)
+st.markdown('<div class="executive-sub">Descarga resultados para seguimiento fuera de la aplicación.</div>', unsafe_allow_html=True)
 
 filas_res = []
 for cuenta, auds in todas_auditorias.items():
@@ -3049,11 +3452,7 @@ for cuenta, auds in todas_auditorias.items():
     filas_res.append(fila)
 df_res = pd.DataFrame(filas_res)
 
-todos_items = [
-    {**i, "tipo_auditoria": "cobrado"}
-    for data in cuentas.values()
-    for i in data["todos_los_items"]
-]
+todos_items = [{**i, "tipo_auditoria": "cobrado"} for data in cuentas.values() for i in data["todos_los_items"]]
 df_items = pd.DataFrame(todos_items) if todos_items else pd.DataFrame()
 
 col1, col2 = st.columns(2)
@@ -3063,6 +3462,7 @@ with col1:
         data=df_res.to_csv(index=False).encode("utf-8"),
         file_name="auditoria_resumen.csv",
         mime="text/csv",
+        use_container_width=True,
     )
 with col2:
     if not df_items.empty:
@@ -3071,4 +3471,7 @@ with col2:
             data=df_items.to_csv(index=False).encode("utf-8"),
             file_name="auditoria_items.csv",
             mime="text/csv",
+            use_container_width=True,
         )
+    else:
+        st.button("Todos los ítems del estado de cuenta (CSV)", disabled=True, use_container_width=True)
