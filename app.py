@@ -3290,6 +3290,218 @@ def render_grupo_auditorias(titulo: str, descripcion: str, auds: list, color: st
 
 
 
+
+st.markdown("""
+<style>
+.v6-trust-box{border:1px solid #EAECF0;border-radius:18px;background:#FFFFFF;padding:16px 18px;margin:12px 0 18px;box-shadow:0 8px 26px rgba(16,24,40,.05)}
+.v6-trust-top{display:flex;align-items:flex-start;justify-content:space-between;gap:20px}
+.v6-trust-eyebrow{font-size:11px;text-transform:uppercase;letter-spacing:.07em;color:#667085;font-weight:800;margin-bottom:3px}
+.v6-trust-title{font-size:20px;line-height:1.15;font-weight:900;color:#101828}
+.v6-trust-sub{font-size:13px;color:#667085;margin-top:5px;line-height:1.45}
+.v6-trust-score{font-size:34px;font-weight:900;line-height:1;color:#101828;white-space:nowrap}
+.v6-trust-bar{height:10px;background:#F2F4F7;border-radius:999px;overflow:hidden;margin-top:14px}
+.v6-trust-fill{height:100%;border-radius:999px}.v6-trust-fill-green{background:#12B76A}.v6-trust-fill-yellow{background:#F79009}.v6-trust-fill-red{background:#F04438}.v6-trust-fill-gray{background:#98A2B3}
+.v6-trust-green{border-color:#ABEFC6}.v6-trust-yellow{border-color:#FEDF89}.v6-trust-red{border-color:#FECDCA}.v6-trust-gray{border-color:#D0D5DD}
+.v6-mini-note{font-size:12px;color:#667085;line-height:1.45;margin-top:4px}
+</style>
+""", unsafe_allow_html=True)
+
+# =========================================================
+# V6 — CONFIABILIDAD DEL ANÁLISIS
+# =========================================================
+def _v6_doc_type_counts(data: dict) -> dict:
+    counts = defaultdict(int)
+    for af in data.get("archivos", []):
+        tipo = af.get("tipo_documento") or "otro"
+        if str(tipo).startswith("estado_cuenta"):
+            counts["estado_cuenta"] += 1
+        elif tipo == "servicios_cirugia":
+            counts["servicios_cirugia"] += 1
+        elif tipo == "nota_postquirurgica":
+            counts["nota_postquirurgica"] += 1
+        else:
+            counts["otro"] += 1
+    return dict(counts)
+
+
+def _v6_confianza_tone(score: int) -> str:
+    if score >= 90:
+        return "green"
+    if score >= 75:
+        return "yellow"
+    if score >= 60:
+        return "yellow"
+    return "red"
+
+
+def _v6_confianza_label(score: int) -> str:
+    if score >= 90:
+        return "Alta"
+    if score >= 75:
+        return "Media"
+    if score >= 60:
+        return "Baja"
+    return "Crítica"
+
+
+def _v6_agregar_check(checks: list, componente: str, estado: str, detalle: str, impacto: int = 0, severidad: str = "ok"):
+    checks.append({"Componente": componente, "Estado": estado, "Detalle": detalle, "Impacto": impacto, "Severidad": severidad})
+
+
+def _v6_construir_diagnostico_cuenta(cuenta: str, data: dict, auds: list) -> dict:
+    """Capa de confianza. No modifica reglas ni resultados; solo mide evidencia y cautela."""
+    checks = []
+    penalizacion = 0
+    docs = _v6_doc_type_counts(data)
+    items = data.get("todos_los_items", []) or []
+    sc = data.get("servicios_cirugia")
+    grupos = _ui_groups(auds)
+
+    if docs.get("estado_cuenta", 0) > 0:
+        _v6_agregar_check(checks, "Estado de cuenta", "Detectado", f"{docs.get('estado_cuenta', 0)} documento(s) de cuenta procesado(s).", 0, "ok")
+    else:
+        penalizacion += 35
+        _v6_agregar_check(checks, "Estado de cuenta", "Faltante", "Sin estado de cuenta no se pueden validar cargos cobrados.", -35, "err")
+
+    if docs.get("servicios_cirugia", 0) > 0:
+        _v6_agregar_check(checks, "Hoja de servicios de cirugía", "Detectada", f"{docs.get('servicios_cirugia', 0)} hoja(s) procesada(s).", 0, "ok")
+    else:
+        penalizacion += 20
+        _v6_agregar_check(checks, "Hoja de servicios de cirugía", "Faltante", "Las reglas basadas en servicios marcados pueden quedar no evaluables.", -20, "warn")
+
+    if docs.get("nota_postquirurgica", 0) > 0:
+        _v6_agregar_check(checks, "Nota post-quirúrgica", "Detectada", f"{docs.get('nota_postquirurgica', 0)} nota(s) procesada(s).", 0, "ok")
+    else:
+        penalizacion += 8
+        _v6_agregar_check(checks, "Nota post-quirúrgica", "No detectada", "No bloquea toda la auditoría, pero limita validaciones clínicas/documentales.", -8, "warn")
+
+    if docs.get("otro", 0) > 0:
+        pen = min(12, docs.get("otro", 0) * 4)
+        penalizacion += pen
+        _v6_agregar_check(checks, "Documentos no reconocidos", "Revisar", f"{docs.get('otro', 0)} archivo(s) no clasificado(s) automáticamente.", -pen, "warn")
+
+    if len(items) >= 15:
+        _v6_agregar_check(checks, "Extracción de cargos", "Correcta", f"{len(items)} ítem(s) extraídos del estado de cuenta.", 0, "ok")
+    elif len(items) > 0:
+        penalizacion += 10
+        _v6_agregar_check(checks, "Extracción de cargos", "Limitada", f"Solo {len(items)} ítem(s) extraídos. Revisar si el PDF tiene formato parcial o corte incompleto.", -10, "warn")
+    else:
+        penalizacion += 25
+        _v6_agregar_check(checks, "Extracción de cargos", "Sin cargos extraídos", "No se detectaron ítems cobrados. La auditoría financiera no es confiable.", -25, "err")
+
+    if data.get("paciente") and data.get("paciente") != "No identificado":
+        _v6_agregar_check(checks, "Paciente", "Identificado", str(data.get("paciente")), 0, "ok")
+    else:
+        penalizacion += 5
+        _v6_agregar_check(checks, "Paciente", "No identificado", "El nombre del paciente no fue extraído con confianza.", -5, "warn")
+
+    if data.get("seguro") and data.get("seguro") != "desconocido":
+        _v6_agregar_check(checks, "Pagador / seguro", "Identificado", str(data.get("seguro")), 0, "ok")
+    else:
+        penalizacion += 6
+        _v6_agregar_check(checks, "Pagador / seguro", "No identificado", "Algunas reglas dependen del pagador/aseguradora.", -6, "warn")
+
+    if cuenta == "SIN_CUENTA":
+        penalizacion += 20
+        _v6_agregar_check(checks, "Cuenta NC", "No detectada", "El archivo no permitió identificar NCxxxxx con claridad.", -20, "err")
+    else:
+        _v6_agregar_check(checks, "Cuenta NC", "Detectada", cuenta, 0, "ok")
+
+    if sc:
+        campos_sc = [sc.get("hora_total_qx"), sc.get("ingreso_sala"), sc.get("egreso_sala"), sc.get("sala_hrs_normal"), sc.get("sala_hrs_adicional"), sc.get("oxigeno_qx")]
+        completos = sum(1 for v in campos_sc if v not in (None, "", 0))
+        if completos >= 3:
+            _v6_agregar_check(checks, "Datos quirúrgicos", "Suficientes", f"{completos}/6 campos clave detectados en hoja de servicios.", 0, "ok")
+        else:
+            penalizacion += 8
+            _v6_agregar_check(checks, "Datos quirúrgicos", "Parciales", f"Solo {completos}/6 campos clave detectados. Revisar hoja de servicios.", -8, "warn")
+
+    if data.get("num_cirugias", 0) > 1:
+        pen = min(10, 4 * data.get("num_cirugias", 0))
+        penalizacion += pen
+        _v6_agregar_check(checks, "Múltiples cirugías", "Cautela", f"{data.get('num_cirugias')} eventos quirúrgicos detectados. Los totales pueden requerir revisión individual.", -pen, "warn")
+
+    if grupos["catalogo"]:
+        pen = min(18, len(grupos["catalogo"]) * 6)
+        penalizacion += pen
+        _v6_agregar_check(checks, "Alertas de catálogo", "Revisar", f"{len(grupos['catalogo'])} posible(s) código(s) no catalogado(s).", -pen, "warn")
+    else:
+        _v6_agregar_check(checks, "Alertas de catálogo", "Sin alertas", "No se detectaron posibles códigos nuevos por descripción.", 0, "ok")
+
+    if grupos["financieros"]:
+        _v6_agregar_check(checks, "Resultado financiero", "Con hallazgos", f"{len(grupos['financieros'])} diferencia(s) financiera(s) detectada(s).", 0, "warn")
+    else:
+        _v6_agregar_check(checks, "Resultado financiero", "Sin diferencias críticas", "No se detectaron diferencias financieras relevantes con las reglas actuales.", 0, "ok")
+
+    reglas_ejecutadas = len(auds)
+    reglas_ok = len(grupos["ok"])
+    reglas_grises = len(grupos["informativos"])
+    no_evaluable = [a for a in auds if a.get("clase") == "gray" and "sin" in normalizar(a.get("status", ""))]
+    if no_evaluable:
+        pen = min(12, len(no_evaluable) * 3)
+        penalizacion += pen
+        _v6_agregar_check(checks, "Reglas no evaluables", "Cautela", f"{len(no_evaluable)} regla(s) quedaron sin evidencia suficiente.", -pen, "warn")
+
+    score = int(max(0, min(100, round(100 - penalizacion))))
+    tone = _v6_confianza_tone(score)
+    label = _v6_confianza_label(score)
+
+    areas = defaultdict(int)
+    for i in items:
+        areas[i.get("area", "sin_area")] += 1
+
+    limitaciones = [c for c in checks if c["Severidad"] in ("warn", "err") and c["Impacto"] < 0]
+    return {"score": score, "label": label, "tone": tone, "checks": checks, "limitaciones": limitaciones, "docs": docs, "items_count": len(items), "areas": dict(areas), "reglas_ejecutadas": reglas_ejecutadas, "reglas_ok": reglas_ok, "reglas_informativas": reglas_grises, "reglas_no_evaluables": len(no_evaluable), "resumen": f"Confiabilidad {label.lower()} ({score}%). Reglas ejecutadas: {reglas_ejecutadas}; ítems extraídos: {len(items)}."}
+
+
+def _v6_render_confianza_box(diag: dict):
+    score = diag.get("score", 0)
+    label = diag.get("label", "")
+    tone = diag.get("tone", "gray")
+    st.markdown(f"""
+        <div class="v6-trust-box v6-trust-{tone}">
+          <div class="v6-trust-top">
+            <div>
+              <div class="v6-trust-eyebrow">Control de calidad del análisis</div>
+              <div class="v6-trust-title">Confiabilidad {h(label)} · {score}%</div>
+              <div class="v6-trust-sub">{h(diag.get('resumen',''))}</div>
+            </div>
+            <div class="v6-trust-score">{score}%</div>
+          </div>
+          <div class="v6-trust-bar"><div class="v6-trust-fill v6-trust-fill-{tone}" style="width:{score}%;"></div></div>
+        </div>
+        """, unsafe_allow_html=True)
+
+
+def _v6_render_diagnostico(data: dict, auds: list, cuenta: str):
+    diag = _v6_construir_diagnostico_cuenta(cuenta, data, auds)
+    _v6_render_confianza_box(diag)
+    c1, c2, c3, c4 = st.columns(4)
+    with c1:
+        _ui_kpi("Ítems extraídos", str(diag["items_count"]), "Cargos leídos de cuenta", "green" if diag["items_count"] else "red")
+    with c2:
+        _ui_kpi("Reglas ejecutadas", str(diag["reglas_ejecutadas"]), f"OK: {diag['reglas_ok']}", "green")
+    with c3:
+        _ui_kpi("No evaluables", str(diag["reglas_no_evaluables"]), "Por falta de evidencia", "yellow" if diag["reglas_no_evaluables"] else "green")
+    with c4:
+        _ui_kpi("Limitaciones", str(len(diag["limitaciones"])), "Advertencias de confianza", "yellow" if diag["limitaciones"] else "green")
+    st.markdown("#### Diagnóstico de documentos y lectura")
+    df_checks = pd.DataFrame(diag["checks"])
+    if not df_checks.empty:
+        st.dataframe(df_checks, use_container_width=True, hide_index=True)
+    st.markdown("#### Distribución de cargos extraídos por área")
+    areas = diag.get("areas", {})
+    if areas:
+        df_areas = pd.DataFrame([{"Área": k, "Ítems": v} for k, v in sorted(areas.items())])
+        st.dataframe(df_areas, use_container_width=True, hide_index=True)
+    else:
+        st.info("No hay cargos extraídos por área.")
+    if diag["limitaciones"]:
+        st.warning("La cuenta tiene limitaciones de análisis. El resultado debe revisarse con la evidencia antes de cerrarse.")
+    else:
+        st.success("No se detectaron limitaciones relevantes de lectura o evidencia.")
+
+
 def render_header():
     st.markdown(
         f"""
@@ -3304,7 +3516,7 @@ def render_header():
           </div>
           <div class="nch-header-right">
             <div class="nch-status"><span class="nch-status-dot"></span>Motor activo</div>
-            <div class="nch-version">Frontend v5 · detalle en modal · reglas intactas</div>
+            <div class="nch-version">Frontend v6 · confiabilidad · detalle en modal · reglas intactas</div>
           </div>
         </div>
         """,
@@ -3341,6 +3553,7 @@ def render_detalle_cuenta_body(cuenta_key: str, cuentas: dict, todas_auditorias:
     data = cuentas[cuenta_key]
     auds = todas_auditorias[cuenta_key]
     grupos = _ui_groups(auds)
+    diag = _v6_construir_diagnostico_cuenta(cuenta_key, data, auds)
     riesgo_txt, riesgo_cls, riesgo_desc = _ui_riesgo(auds)
     monto_total = _ui_money(auds)
     seguro_label = data.get("seguro", "") or "No identificado"
@@ -3372,6 +3585,8 @@ def render_detalle_cuenta_body(cuenta_key: str, cuentas: dict, todas_auditorias:
             st.session_state["cuenta_modal_v5"] = None
             st.rerun()
 
+    _v6_render_confianza_box(diag)
+
     m1, m2, m3, m4 = st.columns(4)
     with m1:
         _ui_kpi("Financieros", str(len(grupos["financieros"])), f"≈ ${monto_total:,.0f}", "red" if grupos["financieros"] else "green")
@@ -3382,8 +3597,8 @@ def render_detalle_cuenta_body(cuenta_key: str, cuentas: dict, todas_auditorias:
     with m4:
         _ui_kpi("OK", str(len(grupos["ok"])), "Ocultas por defecto", "green")
 
-    tab_resumen, tab_hallazgos, tab_evidencia, tab_traza, tab_docs = st.tabs([
-        "Resumen", "Hallazgos", "Evidencia", "Cómo auditó", "Documentos"
+    tab_resumen, tab_hallazgos, tab_confiabilidad, tab_evidencia, tab_traza, tab_docs = st.tabs([
+        "Resumen", "Hallazgos", "Confiabilidad", "Evidencia", "Cómo auditó", "Documentos"
     ])
 
     with tab_resumen:
@@ -3414,6 +3629,11 @@ def render_detalle_cuenta_body(cuenta_key: str, cuentas: dict, todas_auditorias:
             with st.expander(f"🟢 Validaciones correctas ({len(grupos['ok'])})", expanded=False):
                 for a in grupos["ok"]:
                     render_auditoria(a)
+
+    with tab_confiabilidad:
+        st.markdown("### Confiabilidad y limitaciones del análisis")
+        st.caption("Esta capa no cambia ninguna regla. Solo indica qué tan defendible es el análisis según documentos, extracción, evidencia y alertas.")
+        _v6_render_diagnostico(data, auds, cuenta_key)
 
     with tab_evidencia:
         st.markdown("### Evidencia trazada por validación")
@@ -3459,7 +3679,7 @@ def render_detalle_cuenta_modal(cuenta_key: str, cuentas: dict, todas_auditorias
     render_detalle_cuenta_body(cuenta_key, cuentas, todas_auditorias, hash_archivos, dentro_modal=_MODAL_DISPONIBLE)
 
 # =========================================================
-# APP V5 — FRONTEND ESTABLE CON DETALLE EN MODAL
+# APP V6 — FRONTEND CONFIABILIDAD + DETALLE EN MODAL
 # =========================================================
 render_header()
 
@@ -3536,6 +3756,7 @@ try:
     with st.spinner("Analizando documentos…"):
         cuentas = consolidar_por_cuenta(archivos_bytes)
         todas_auditorias = {cta: construir_auditorias(data, tolerancia_ui) for cta, data in cuentas.items()}
+        diagnosticos_cuenta = {cta: _v6_construir_diagnostico_cuenta(cta, data, todas_auditorias[cta]) for cta, data in cuentas.items()}
 
         if st.session_state.get("_ultimo_log_enviado") != _hash_actual:
             _enviar_log_email(cuentas, todas_auditorias, archivos_bytes)
@@ -3554,11 +3775,14 @@ total_catalogo = sum(len(_ui_groups(auds)["catalogo"]) for auds in todas_auditor
 total_ok = sum(len(_ui_groups(auds)["ok"]) for auds in todas_auditorias.values())
 cuentas_atencion = sum(1 for auds in todas_auditorias.values() if len(_ui_groups(auds)["financieros"]) or len(_ui_groups(auds)["operativos"]) or len(_ui_groups(auds)["catalogo"]))
 monto_global = sum(_ui_money(auds) for auds in todas_auditorias.values())
+confianza_global = int(round(sum(d.get("score", 0) for d in diagnosticos_cuenta.values()) / max(1, len(diagnosticos_cuenta)))) if diagnosticos_cuenta else 0
+confianza_global_label = _v6_confianza_label(confianza_global)
+confianza_global_tone = _v6_confianza_tone(confianza_global)
 
 st.markdown('<div class="executive-title">Resumen ejecutivo del lote</div>', unsafe_allow_html=True)
 st.markdown('<div class="executive-sub">Vista rápida para decidir qué cuenta revisar primero.</div>', unsafe_allow_html=True)
 
-k1, k2, k3, k4, k5, k6 = st.columns(6)
+k1, k2, k3, k4, k5, k6, k7 = st.columns(7)
 with k1:
     _ui_kpi("Cuentas", str(total_cuentas), f"{len(archivos_bytes)} archivo(s)")
 with k2:
@@ -3571,6 +3795,15 @@ with k5:
     _ui_kpi("Catálogo", str(total_catalogo), "Avisar a Jordan/sistemas", "blue" if total_catalogo else "green")
 with k6:
     _ui_kpi("Monto", f"≈ ${monto_global:,.0f}", "Hallazgos estimados", "red" if monto_global else "green")
+with k7:
+    _ui_kpi("Confianza", f"{confianza_global}%", confianza_global_label, confianza_global_tone)
+
+_v6_render_confianza_box({
+    "score": confianza_global,
+    "label": confianza_global_label,
+    "tone": confianza_global_tone,
+    "resumen": f"Promedio de confiabilidad del lote. Cuentas: {total_cuentas}; archivos: {len(archivos_bytes)}; validaciones OK: {total_ok}.",
+})
 
 st.markdown(
     f'<div class="audit-meta-line">Auditoría generada: {h(_ts_auditoria)} · Hash de archivos: <code>{h(_hash_actual[:12])}…</code> · Validaciones OK: {total_ok} · Tolerancia: {tolerancia_ui:.2f}</div>',
@@ -3629,6 +3862,7 @@ if not cuentas_ordenadas:
 for cuenta, data in cuentas_ordenadas:
     auds = todas_auditorias[cuenta]
     grupos = _ui_groups(auds)
+    diag = diagnosticos_cuenta.get(cuenta) or _v6_construir_diagnostico_cuenta(cuenta, data, auds)
     riesgo_txt, riesgo_cls, riesgo_desc = _ui_riesgo(auds)
     monto_total = _ui_money(auds)
 
@@ -3643,6 +3877,7 @@ for cuenta, data in cuentas_ordenadas:
         pills += _ui_pill("Sin hallazgos", "green")
     if monto_total >= 1:
         pills += _ui_pill(f"≈ ${monto_total:,.0f}", "dark")
+    pills += _ui_pill(f"Confianza {diag.get('score', 0)}%", diag.get("tone", "gray"))
 
     seguro_label = data.get("seguro", "") or "No identificado"
     archivos_txt = f"{len(data.get('archivos', []))} archivo(s)"
@@ -3689,6 +3924,10 @@ for cuenta, auds in todas_auditorias.items():
         "Seguro": cuentas[cuenta].get("seguro", ""),
         "Fecha_auditoria": _ts_auditoria,
         "Hash_archivos": _hash_actual[:12],
+        "Confiabilidad_%": diagnosticos_cuenta.get(cuenta, {}).get("score", ""),
+        "Confiabilidad_estado": diagnosticos_cuenta.get(cuenta, {}).get("label", ""),
+        "Items_extraidos": diagnosticos_cuenta.get(cuenta, {}).get("items_count", ""),
+        "Reglas_no_evaluables": diagnosticos_cuenta.get(cuenta, {}).get("reglas_no_evaluables", ""),
     }
     for a in auds:
         fila[a["label"]] = a["status"]
